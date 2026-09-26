@@ -1,0 +1,296 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mock Workday</title>
+<style>
+  body { font-family: sans-serif; margin: 20px; }
+  [data-automation-id^="formField"] { margin: 8px 0; }
+  ul[role=listbox], .prompt-list { border: 1px solid #999; padding: 4px; list-style: none; background: #fff; }
+  .modal { border: 2px solid #333; padding: 10px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// A small imitation of Workday's markup and widget behaviour, used by the tests.
+const $ = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+const root = document.getElementById('root');
+const accounts = {};
+window.__submitted = null;
+let uid = 0;
+
+function jobPage() {
+  root.innerHTML = '<h1>Software Engineering Intern</h1>';
+  const apply = $('<a href="#" data-automation-id="adventureButton" role="button">Apply</a>');
+  apply.onclick = (e) => {
+    e.preventDefault();
+    const modal = $('<div class="modal"><a href="#" data-automation-id="autofillWithResume">Autofill with Resume</a> <a href="#" data-automation-id="applyManually">Apply Manually</a></div>');
+    modal.querySelector('[data-automation-id="applyManually"]').onclick = (ev) => { ev.preventDefault(); signInPage(); };
+    root.appendChild(modal);
+  };
+  root.appendChild(apply);
+}
+
+function authError(msg) {
+  root.querySelectorAll('[data-automation-id="errorMessage"]').forEach(e => e.remove());
+  root.appendChild($(`<div data-automation-id="errorMessage">${msg}</div>`));
+}
+
+function signInPage() {
+  root.innerHTML = `<h2>Sign In</h2>
+    <label>Email Address<input data-automation-id="email" type="text"></label>
+    <label>Password<input data-automation-id="password" type="password"></label>
+    <div style="position:relative;display:inline-block">
+      <button data-automation-id="signInSubmitButton">Sign In</button>
+      <div data-automation-id="click_filter" aria-label="Sign In" style="position:absolute;inset:0"></div>
+    </div>
+    <button data-automation-id="createAccountLink">Create Account</button>`;
+  root.querySelector('[data-automation-id="click_filter"]').onclick = () => {
+    const email = root.querySelector('[data-automation-id="email"]').value;
+    const pw = root.querySelector('[data-automation-id="password"]').value;
+    if (accounts[email] === pw) application(); else authError('Wrong email address or password.');
+  };
+  root.querySelector('[data-automation-id="createAccountLink"]').onclick = createAccountPage;
+}
+
+function createAccountPage() {
+  root.innerHTML = `<h2>Create Account</h2><form onsubmit="return false">
+    <label>Email Address<input data-automation-id="email" type="text"></label>
+    <label>Password<input data-automation-id="password" type="password"></label>
+    <label>Verify New Password<input data-automation-id="verifyPassword" type="password"></label>
+    <label><input type="checkbox" data-automation-id="createAccountCheckbox"> I agree</label>
+    <div style="position:relative;display:inline-block">
+      <button data-automation-id="createAccountSubmitButton">Create Account</button>
+      <div data-automation-id="click_filter" aria-label="Create Account" style="position:absolute;inset:0"></div>
+    </div>
+    <button data-automation-id="signInLink">Sign In</button></form>`;
+  root.querySelector('[data-automation-id="click_filter"]').onclick = () => {
+    const q = (id) => root.querySelector(`[data-automation-id="${id}"]`);
+    if (q('password').value !== q('verifyPassword').value) return authError('Passwords do not match');
+    if (!q('createAccountCheckbox').checked) return authError('You must agree');
+    accounts[q('email').value] = q('password').value;
+    application();
+  };
+  root.querySelector('[data-automation-id="signInLink"]').onclick = signInPage;
+}
+
+// ---------------------------------------------------------------- widgets
+function field(label, inner, required = true) {
+  const id = 'f' + (++uid);
+  const el = $(`<div data-automation-id="formField-${id}"><label for="${id}">${label}${required ? '<abbr>*</abbr>' : ''}</label></div>`);
+  const control = inner(id);
+  el.appendChild(control);
+  el.dataset.name = label;
+  return el;
+}
+const text = (label, req = true) => field(label, id => $(`<input id="${id}" type="text">`), req);
+const textarea = (label, req = true) => field(label, id => $(`<textarea id="${id}"></textarea>`), req);
+
+function dropdown(label, options, req = true) {
+  return field(label, id => {
+    const b = $(`<button id="${id}" type="button" aria-haspopup="listbox">Select One</button>`);
+    b.onclick = () => {
+      document.querySelectorAll('ul[role=listbox]').forEach(e => e.remove());
+      const ul = $('<ul role="listbox"></ul>');
+      for (const o of ['Select One', ...options]) {
+        const li = $(`<li role="option">${o}</li>`);
+        li.onclick = () => { b.textContent = o; ul.remove(); };
+        ul.appendChild(li);
+      }
+      document.body.appendChild(ul);
+    };
+    return b;
+  }, req);
+}
+
+// options: array of strings, or {name: [children]} for categories
+function prompt(label, options, req = true, multi = false) {
+  return field(label, id => {
+    const wrap = $(`<div><div data-automation-id="multiselectInputContainer"><input id="${id}" type="text"></div><div class="selected"></div></div>`);
+    const input = wrap.querySelector('input');
+    const selected = wrap.querySelector('.selected');
+    const show = (items) => {
+      document.querySelectorAll('.prompt-list').forEach(e => e.remove());
+      const list = $('<div class="prompt-list"></div>');
+      for (const item of items) {
+        const name = typeof item === 'string' ? item : Object.keys(item)[0];
+        const opt = $(`<div role="option" data-automation-id="promptOption">${name}</div>`);
+        opt.onclick = () => {
+          if (typeof item !== 'string') return show(item[name]);
+          if (!multi) selected.innerHTML = '';
+          selected.appendChild($(`<div data-automation-id="selectedItem">${name}</div>`));
+          input.value = ''; list.remove();
+        };
+        list.appendChild(opt);
+      }
+      wrap.appendChild(list);
+    };
+    const flat = (items) => items.flatMap(i => typeof i === 'string' ? [i] : flat(Object.values(i)[0]));
+    input.onclick = () => show(options);
+    input.onkeydown = (e) => {
+      if (e.key !== 'Enter') return;
+      const q = input.value.toLowerCase();
+      show(q ? flat(options).filter(o => o.toLowerCase().includes(q)) : options);
+    };
+    return wrap;
+  }, req);
+}
+
+function radio(question, options, req = true) {
+  const name = 'r' + (++uid);
+  const el = $(`<div data-automation-id="formField-${name}"><fieldset><legend><label>${question}${req ? '*' : ''}</label></legend></fieldset></div>`);
+  options.forEach((o, i) => {
+    el.querySelector('fieldset').appendChild($(`<div><input type="radio" id="${name}-${i}" name="${name}" value="${o}"><label for="${name}-${i}">${o}</label></div>`));
+  });
+  el.dataset.name = question;
+  return el;
+}
+
+function checkboxes(question, options, req = true) {
+  const name = 'c' + (++uid);
+  const el = $(`<div data-automation-id="formField-${name}"><fieldset><legend>${question}${req ? '*' : ''}</legend></fieldset></div>`);
+  options.forEach((o, i) => {
+    el.querySelector('fieldset').appendChild($(`<div><input type="checkbox" id="${name}-${i}" value="${o}"><label for="${name}-${i}">${o}</label></div>`));
+  });
+  el.dataset.name = question;
+  return el;
+}
+
+function checkbox(labelText, req = false) {
+  const id = 'cb' + (++uid);
+  const el = $(`<div data-automation-id="formField-${id}"><p>Please read our terms.</p><input type="checkbox" id="${id}"${req ? ' aria-required="true"' : ''}><label for="${id}">${labelText}</label></div>`);
+  el.dataset.name = labelText;
+  return el;
+}
+
+function date(label, sections = ['Month', 'Year'], req = true) {
+  const id = 'd' + (++uid);
+  const el = $(`<div data-automation-id="formField-${id}"><label>${label}${req ? '*' : ''}</label><div data-automation-id="dateInputWrapper"></div></div>`);
+  for (const s of sections) el.querySelector('div').appendChild($(`<input type="text" data-automation-id="dateSection${s}-input">`));
+  el.dataset.name = label;
+  return el;
+}
+
+function readField(el) {
+  if (el.querySelector('input[type=file]')) return el.querySelector('input[type=file]').files.length ? el.querySelector('input[type=file]').files[0].name : '';
+  if (el.querySelector('[data-automation-id="dateInputWrapper"]')) return [...el.querySelectorAll('[data-automation-id^="dateSection"]')].map(i => i.value).join('/');
+  if (el.querySelector('button[aria-haspopup]')) { const t = el.querySelector('button[aria-haspopup]').textContent; return t === 'Select One' ? '' : t; }
+  if (el.querySelector('[data-automation-id="multiselectInputContainer"]')) return [...el.querySelectorAll('[data-automation-id="selectedItem"]')].map(e => e.textContent).join('; ');
+  const radios = el.querySelectorAll('input[type=radio]');
+  if (radios.length) return [...radios].filter(r => r.checked).map(r => r.value).join('; ');
+  const checks = el.querySelectorAll('input[type=checkbox]');
+  if (checks.length > 1) return [...checks].filter(r => r.checked).map(r => r.value).join('; ');
+  if (checks.length === 1) return checks[0].checked;
+  return (el.querySelector('input, textarea') || {}).value || '';
+}
+
+// ---------------------------------------------------------------- application
+function repeating(section, fieldsFn) {
+  const sec = $(`<div><h3>${section}</h3><div class="groups"></div><button type="button">Add</button></div>`);
+  const btn = sec.querySelector('button');
+  btn.onclick = () => {
+    const n = sec.querySelectorAll('.group').length + 1;
+    const g = $(`<div class="group"><h4>${section} ${n}</h4></div>`);
+    fieldsFn().forEach(f => g.appendChild(f));
+    sec.querySelector('.groups').appendChild(g);
+    btn.textContent = 'Add Another';
+  };
+  return sec;
+}
+
+const STEPS = [
+  ['My Information', () => [
+    prompt('How Did You Hear About Us?', [{'Job Board': ['LinkedIn', 'Indeed']}, 'Career Fair', 'Other']),
+    radio('Have you previously worked for Mock Corp?', ['Yes', 'No']),
+    dropdown('Country', ['Canada', 'United States of America']),
+    text('Given Name(s)'), text('Middle Name', false), text('Family Name'),
+    checkbox('I have a preferred name'),
+    text('Address Line 1'), text('City'),
+    dropdown('State', ['California', 'Illinois', 'New York']),
+    text('Postal Code'),
+    dropdown('Phone Device Type', ['Landline', 'Mobile']),
+    prompt('Country Phone Code', ['Canada (+1)', 'United States of America (+1)']),
+    text('Phone Number'), text('Phone Extension', false),
+  ]],
+  ['My Experience', () => [
+    repeating('Work Experience', () => [text('Job Title'), text('Company'), text('Location', false),
+      checkbox('I currently work here'), date('From'), date('To', ['Month', 'Year'], false), textarea('Role Description', false)]),
+    repeating('Education', () => [prompt('School or University', ['Stanford University', 'University of Illinois Urbana-Champaign']),
+      dropdown('Degree', ["Associate's Degree", "Bachelor's Degree", "Master's Degree"]),
+      prompt('Field of Study', ['Computer Science', 'Mathematics'], false),
+      text('Overall Result (GPA)', false), date('From', ['Year'], false), date('To (Actual or Expected)', ['Year'], false)]),
+    prompt('Type to Add Skills', ['Python', 'Java', 'JavaScript', 'SQL', 'Git'], false, true),
+    field('Resume/CV', id => {
+      const inp = $(`<input id="${id}" type="file">`);
+      inp.onchange = () => inp.after($(`<div data-automation-id="file-upload-item">${inp.files[0].name}</div>`));
+      return inp;
+    }),
+    text('LinkedIn Profile', false),
+  ]],
+  ['Application Questions', () => [
+    radio('Are you legally authorized to work in the United States?', ['Yes', 'No']),
+    radio('Will you now or in the future require sponsorship for employment visa status?', ['Yes', 'No']),
+    dropdown('Are you at least 18 years of age?', ['Yes', 'No']),
+    dropdown('Do you have a non-compete agreement?', ['Yes', 'No']),
+    textarea('What is your favorite color?', false),
+  ]],
+  ['Voluntary Disclosures', () => [
+    dropdown('Gender', ['Male', 'Female', 'I do not wish to self-identify']),
+    dropdown('Are you Hispanic or Latino?', ['Yes', 'No', 'I do not wish to answer']),
+    dropdown('Race/Ethnicity', ['Asian (United States of America)', 'White (United States of America)', 'I do not wish to self-identify']),
+    dropdown('Veteran Status', ['I identify as one or more of the classifications of protected veteran', 'I am not a protected veteran', 'I do not wish to self-identify']),
+    checkbox('Yes, I have read and consent to the terms and conditions', true),
+  ]],
+  ['Self Identify', () => [
+    text('Name'),
+    date('Date', ['Month', 'Day', 'Year']),
+    dropdown('Language', ['English', 'Spanish']),
+    checkboxes('Please check one of the boxes below:', ['Yes, I have a disability, or have had one in the past', 'No, I do not have a disability and have not had one in the past', 'I do not want to answer']),
+  ]],
+];
+
+function application(stepIndex = 0) {
+  root.innerHTML = '';
+  const bar = $('<ol data-automation-id="progressBar"></ol>');
+  [...STEPS.map(s => s[0]), 'Review'].forEach((s, i) => bar.appendChild($(`<li ${i === stepIndex ? 'data-automation-id="progressBarActiveStep" aria-current="step"' : ''}>${s}</li>`)));
+  root.appendChild(bar);
+  const next = $('<button data-automation-id="bottom-navigation-next-button"></button>');
+  if (stepIndex === STEPS.length) {
+    root.appendChild($('<h2>Review</h2>'));
+    next.textContent = 'Submit';
+    next.onclick = () => { root.innerHTML = '<h2>Application Submitted</h2><p>Thank you for applying!</p>'; };
+    root.appendChild(next);
+    return;
+  }
+  const [title, build] = STEPS[stepIndex];
+  root.appendChild($(`<h2 data-automation-id="pageHeader">${title}</h2>`));
+  const form = $('<div class="form"></div>');
+  build().forEach(f => form.appendChild(f));
+  root.appendChild(form);
+  next.textContent = 'Save and Continue';
+  next.onclick = () => {
+    root.querySelectorAll('[data-automation-id="errorMessage"]').forEach(e => e.remove());
+    const values = {};
+    const missing = [];
+    for (const el of form.querySelectorAll('[data-automation-id^="formField"]')) {
+      const group = el.closest('.group');
+      const key = (group ? group.querySelector('h4').textContent + ' / ' : '') + el.dataset.name;
+      values[key] = readField(el);
+      const required = /\*/.test(el.querySelector('label, legend').textContent) || el.querySelector('[aria-required="true"]');
+      if (required && (values[key] === '' || values[key] === false)) missing.push(key);
+    }
+    if (missing.length) {
+      root.appendChild($(`<div data-automation-id="errorMessage">Errors: ${missing.join(', ')}</div>`));
+      return;
+    }
+    window.__submitted = Object.assign(window.__submitted || {}, values);
+    application(stepIndex + 1);
+  };
+  root.appendChild(next);
+}
+
+jobPage();
+</script>
+</body>
+</html>

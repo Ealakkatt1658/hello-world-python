@@ -1,0 +1,96 @@
+# Copy this file to profile.yaml (which is git-ignored) and fill in your details.
+#   cp profile.example.yaml profile.yaml
+
+account:
+  # The email/password used to sign in to (or create) each company's Workday account.
+  # Workday accounts are per company, so the same email+password is reused everywhere.
+  email: you@example.com
+  # Leave blank and set the WORKDAY_PASSWORD environment variable instead (recommended),
+  # or leave both blank to be asked each run.
+  password: ""
+
+resume: ./resume.pdf          # path relative to this file
+
+personal:
+  first_name: Jane
+  middle_name: ""
+  last_name: Doe
+  preferred_name: ""          # leave blank if you don't have one
+  email: you@example.com
+  phone: "5555551234"
+  phone_device_type: Mobile
+  phone_country_code: "United States of America (+1)"
+  address:
+    line1: 123 Main St
+    line2: ""
+    city: Springfield
+    state: Illinois           # full name, as it appears in the dropdown
+    postal_code: "62701"
+    county: ""
+    country: United States of America
+
+links:
+  linkedin: https://www.linkedin.com/in/your-name
+  github: https://github.com/your-name
+  website: ""
+  other: []                   # extra URLs for the "Websites" section
+
+# Most recent first. Dates: "MM/YYYY". Use end: present for a current job.
+work_experience:
+  - title: Software Engineering Intern
+    company: Example Corp
+    location: Chicago, IL
+    start: "05/2025"
+    end: "08/2025"
+    description: |
+      Built internal tools in Python.
+      Improved test coverage by 20%.
+
+education:
+  - school: University of Illinois Urbana-Champaign
+    degree: Bachelor's Degree     # matched against the Degree dropdown options
+    field_of_study: Computer Science
+    gpa: "3.8"
+    start: "08/2023"
+    end: "05/2027"
+
+skills: [Python, Java, SQL, Git]
+
+application:
+  # "Job Board > LinkedIn" walks a category tree; a list gives fallbacks in order.
+  how_did_you_hear: ["LinkedIn", "Job Board > LinkedIn", "Other"]
+  previously_worked_here: "No"
+  over_18: "Yes"
+  work_authorized: "Yes"
+  require_sponsorship: "No"
+  willing_to_relocate: "Yes"
+  relatives_at_company: "No"
+  graduation_date: "05/2027"
+  desired_salary: ""
+  available_start: ""
+
+# Voluntary self-identification (EEO / veteran / disability). These are your answers and are
+# chosen from the option text on the form -- partial text is enough, and a list gives fallbacks.
+# Every option below can be replaced with the "decline to answer" wording, e.g.
+#   "I do not wish to answer" / "I don't wish to answer" / "I do not want to answer".
+self_identification:
+  gender: ["Female", "I do not wish to self-identify"]
+  hispanic_or_latino: "No"
+  ethnicity: ["Asian", "I do not wish to self-identify"]
+  veteran_status: ["I am not a protected veteran", "not a veteran"]
+  disability_status: ["No, I do not have a disability", "No, I don't have a disability"]
+  sexual_orientation: ""
+  pronouns: ""
+  accept_terms: true          # tick "I have read and agree / I consent" checkboxes
+
+# Your own answers for company-specific questions. `question` is a regex matched
+# (case-insensitively) against the question text; these take priority over the built-in rules.
+answers:
+  - question: "non-?compete|restrictive covenant"
+    answer: "No"
+  - question: "(convicted|criminal)"
+    answer: "No"
+  - question: "(gpa|grade point average)"
+    answer: "3.8"
+  - question: "(school|university|college) (are you|do you) (currently )?attend"
+    answer: "University of Illinois Urbana-Champaign"
