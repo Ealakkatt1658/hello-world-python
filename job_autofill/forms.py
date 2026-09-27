@@ -15,7 +15,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
 
 from job_autofill.filling import Answerer, Field, fill_loop, pick_from_list, visible_options
-from job_autofill.matching import Rule, as_choices, best_option, parse_date, truthy
+from job_autofill.matching import Rule, as_choices, best_option, checkbox_state, parse_date, to_text
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +25,10 @@ _LIST_FIELDS_JS = r"""
   const clean = s => (s || '').replace(/[✱∗*]/g, ' *').replace(/\s+/g, ' ').trim();
   const visible = el => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   const root = (scope && document.querySelector(scope)) || document;
-  const shown = el => visible(el) || (el.labels && [...el.labels].some(visible)) || visible(el.parentElement);
+  // Custom-styled radios/checkboxes hide the real input, so for those the label counts. Other
+  // hidden inputs are skipped on purpose: some forms hide a "honeypot" field to catch bots.
+  const shown = el => visible(el) || (['radio', 'checkbox'].includes(el.type) &&
+    ((el.labels && [...el.labels].some(visible)) || visible(el.parentElement)));
 
   const LABELISH = 'legend, label, .application-label, [class*="label" i], [class*="question" i], [class*="title" i]';
   const textOf = el => clean([...el.childNodes].map(n => n.nodeType === 3 ? n.textContent : (n.matches && n.matches('input, select, textarea, [role=listbox], ul[class*="menu" i]') ? '' : n.innerText || n.textContent)).join(' '));
@@ -158,7 +161,7 @@ def set_field(page: Page, field: Field, value: Any) -> bool:
     kind = field.kind
     if kind in ("text", "textarea"):
         el = loc.first
-        el.fill(str(value))
+        el.fill(to_text(value))
         el.blur()
         return True
     if kind == "date":
@@ -192,7 +195,7 @@ def set_field(page: Page, field: Field, value: Any) -> bool:
             log.warning("  No option matching %r among %s", value, field.options)
         return hit
     if kind == "checkbox":
-        _check(loc.first, truthy(value))
+        _check(loc.first, checkbox_state(field.label, value))
         return True
     return False
 

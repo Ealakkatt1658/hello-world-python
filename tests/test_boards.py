@@ -99,6 +99,7 @@ def test_greenhouse_full_application(page, serve, profile, tmp_path):
         "Veteran Status": "I am not a protected veteran",
         "Disability Status": "No, I don't have a disability",
         "I consent to the Acme Rockets candidate privacy notice": True,
+        "__honeypot": "",  # hidden anti-bot field left alone
     }
     # The AI saw the job posting, only non-sensitive questions went to it,
     # and because it drafted an answer we were asked to confirm despite --auto-submit.
@@ -145,3 +146,18 @@ def test_lever_full_application(page, serve, profile, tmp_path):
         "consent[store]": True,
     }
     assert "data engineering intern" in claude.calls[0]["messages"][0]["content"][-2]["text"].lower()
+
+
+def test_greenhouse_blocked_submit_is_not_reported_as_success(page, serve, profile):
+    """The job description already says "Thank you for your interest"; that must not count."""
+    serve({GREENHOUSE_URL: "mock_greenhouse.html"})
+    del profile["application"]["work_authorized"]  # leaves a required question empty
+    pauses = []
+    applier = GreenhouseApplier(
+        page, profile, auto_submit=True, interactive=True, screenshot_dir=None,
+        confirm=lambda msg: pauses.append(msg) or "",
+    )
+    applier.confirm_timeout_ms = 2000
+    assert applier.run(GREENHOUSE_URL) is False
+    assert page.evaluate("window.__submitted") is None
+    assert len(pauses) == 2  # the unanswered question, then the blocked submission

@@ -19,7 +19,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page
 
 from job_autofill.filling import Answerer, Field, fill_loop, pick_from_list, visible_options
-from job_autofill.matching import Rule, as_choices, best_option, parse_date, truthy
+from job_autofill.matching import Rule, as_choices, best_option, checkbox_state, parse_date, to_text
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ def set_field(page: Page, field: Field, value: Any) -> bool:
     if kind == "checkboxes":
         return _set_choice(box, "checkbox", field.options, value)
     if kind == "checkbox":
-        box.locator("input[type=checkbox]").first.set_checked(truthy(value), force=True)
+        box.locator("input[type=checkbox]").first.set_checked(checkbox_state(field.label, value), force=True)
         return True
     return False
 
@@ -220,7 +220,7 @@ def _set_text(box: Locator, value: Any) -> bool:
         "textarea, input:not([type]), input[type=text], input[type=email], input[type=tel], "
         "input[type=number], input[type=url]"
     ).first
-    inp.fill(str(value))
+    inp.fill(to_text(value))
     inp.blur()  # Workday validates/saves on blur
     return True
 

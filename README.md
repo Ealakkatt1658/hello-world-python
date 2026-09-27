@@ -19,17 +19,20 @@ like "Why do you want to work here?" from your resume and the job posting.
 You need Python 3.10 or newer.
 
 ```bash
-git clone <this repo> && cd hello-world-python
+git clone -b claude/job-application-autofiller-42rd3w https://github.com/ealakkatt1658/hello-world-python.git
+cd hello-world-python
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python -m playwright install chromium
 
-cp profile.example.yaml profile.yaml
+cp profile.example.yaml profile.yaml   # Windows: copy profile.example.yaml profile.yaml
 ```
 
 Edit `profile.yaml` with your details and put your resume next to it (e.g. `resume.pdf`).
-`profile.yaml` is git-ignored, so your personal info won't be committed.
+`profile.yaml` is git-ignored, so your personal info won't be committed. Values are used exactly
+as you type them, so you don't need quotes, even for things like `No` or a ZIP code like `02134`.
+Keep the indentation (two spaces) the same as in the example.
 
 To keep your password out of the file, set it as an environment variable:
 
@@ -37,11 +40,25 @@ To keep your password out of the file, set it as an environment variable:
 export WORKDAY_PASSWORD='your-password'        # Windows PowerShell: $env:WORKDAY_PASSWORD='...'
 ```
 
+(`export` only lasts until you close that terminal window, so set it again in a new one.)
+
+Then check everything is set up:
+
+```bash
+python -m job_autofill --check
+```
+
+It confirms your profile loads, your resume is found, your AI key works (if you set one), and
+the browser starts.
+
 ## Use it
 
 ```bash
 python -m job_autofill "https://company.wd5.myworkdayjobs.com/en-US/External/job/..../Software-Intern_R12345"
 ```
+
+**Always put the link in quotes.** Links often contain `&`, which the terminal treats as a
+command separator if the link isn't quoted.
 
 A browser window opens and you can watch it work:
 
@@ -62,6 +79,20 @@ python -m job_autofill URL1 URL2 URL3 --auto-submit
 For Greenhouse and Lever there's no sign-in: it opens the form on the job page, uploads
 your resume, fills in everything, and submits the same way.
 
+### Trying it out for the first time
+
+1. Run `python -m job_autofill --check` and fix anything it reports.
+2. Start with a **Greenhouse or Lever** job. They don't need an account, so they're the simplest.
+3. **Leave off `--auto-submit`.** It will fill everything in and then stop and ask. Look over
+   the form in the browser, then type anything other than `submit` to skip, or `submit` if
+   it all looks right.
+4. Then try a Workday job the same way.
+5. If something goes wrong, send me the log file (its path is printed at the end of every
+   run, under `logs/`) and the snapshot files in `screenshots/`. Whenever it stops or hits an
+   error it saves the page's screenshot and HTML there, which shows exactly what it saw.
+   These files contain your own details from the form, so only share them with people you
+   trust.
+
 ### AI answers for open-ended questions (optional)
 
 Some questions can't come from a fixed rule, like "Why do you want to work at Acme?",
@@ -70,7 +101,7 @@ tool can ask Claude to draft an answer. Claude sees your profile, your resume (P
 job posting. To turn it on, create an API key at https://console.anthropic.com and set it:
 
 ```bash
-export ANTHROPIC_API_KEY='sk-ant-...'
+export ANTHROPIC_API_KEY='sk-ant-...'           # Windows PowerShell: $env:ANTHROPIC_API_KEY='sk-ant-...'
 ```
 
 When the key is set, AI answers are on by default. Use `--no-ai` to turn them off for a run,
@@ -117,6 +148,7 @@ nested menus one level at a time.
 | Flag | What it does |
 |---|---|
 | `--profile PATH` | Use a different profile file (default `profile.yaml`) |
+| `--check` | Check your setup and exit |
 | `--auto-submit` | Submit without asking you first (it still asks if the AI wrote any answers) |
 | `--ai` / `--no-ai` | Force AI-drafted answers on or off (default: on if `ANTHROPIC_API_KEY` is set) |
 | `--channel chrome` | Use your installed Google Chrome instead of Playwright's Chromium |
@@ -125,6 +157,7 @@ nested menus one level at a time.
 | `-v` | Verbose logging |
 
 Screenshots of each Review page and each confirmation page are saved in `screenshots/`.
+Each run's full log goes to `logs/`.
 
 ## How it works
 

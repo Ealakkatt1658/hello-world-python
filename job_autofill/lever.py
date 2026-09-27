@@ -36,11 +36,13 @@ class LeverApplier(BaseApplier):
             log.info("Opening %s", posting)
             self.page.goto(posting, wait_until="domcontentloaded")
             self.settle()
+            self.dismiss_cookie_banner()
             self.capture_job_description()
         log.info("Opening %s", apply)
         self.page.goto(apply, wait_until="domcontentloaded")
         self.settle(1000)
-        if self.first_visible([FORM + " input", "input[name='name']"], 10_000) is None:
+        self.dismiss_cookie_banner()
+        if self.first_visible(["#application-form input", "input[name='name']"], 10_000) is None:
             self.pause("Couldn't find the application form. Open it in the browser.")
 
         resume = self.profile.get("resume")

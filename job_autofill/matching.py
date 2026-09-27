@@ -18,10 +18,12 @@ class _Skip:
 SKIP = _Skip()
 
 
+_QUOTES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"', "\u00a0": " ", "*": " "})
+
+
 def normalize(text: str) -> str:
-    """Lowercase, drop required-asterisks and collapse whitespace."""
-    text = (text or "").replace("*", " ").replace(" ", " ")
-    return re.sub(r"\s+", " ", text).strip().lower()
+    """Lowercase, straighten quotes, drop required-asterisks and collapse whitespace."""
+    return re.sub(r"\s+", " ", (text or "").translate(_QUOTES)).strip().lower()
 
 
 @dataclass
@@ -65,11 +67,20 @@ def find_answer(rules: Iterable[Rule], label: str, kind: str, context: str = "")
     return None
 
 
+def to_text(value: Any) -> str:
+    """How an answer is typed into a form: booleans become Yes/No."""
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    return str(value)
+
+
 def as_choices(value: Any) -> list[str]:
     """An answer may be one string or a list of acceptable alternatives."""
     if isinstance(value, (list, tuple)):
-        return [str(v) for v in value if v is not None and str(v).strip()]
-    return [str(value)]
+        return [to_text(v) for v in value if v is not None and to_text(v).strip()]
+    return [to_text(value)]
 
 
 def best_option(options: list[str], wanted: Any) -> Optional[int]:
@@ -95,7 +106,49 @@ def best_option(options: list[str], wanted: Any) -> Optional[int]:
         for i, o in enumerate(normed):
             if len(o) > 2 and o in w:
                 return i
+        idx = _word_match(normed, w)
+        if idx is not None:
+            return idx
     return None
+
+
+_STOPWORDS = {"i", "am", "a", "an", "the", "of", "and", "or", "to", "is", "are", "my", "me", "have", "has"}
+_NEGATIONS = {"not", "no", "don't", "dont", "doesn't", "never", "non", "decline"}
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z][a-z']*", text) if w not in _STOPWORDS}
+
+
+def _word_match(options: list[str], wanted: str) -> Optional[int]:
+    """Option whose meaningful words all appear in the answer, e.g. "United States +1" for
+    "United States of America". Never pairs a negative answer with a positive option or vice versa."""
+    want = _words(wanted)
+    negated = bool(want & _NEGATIONS)
+    best, best_size = None, 0
+    for i, o in enumerate(options):
+        words = _words(o)
+        if words and words <= want and bool(words & _NEGATIONS) == negated and len(words) > best_size:
+            best, best_size = i, len(words)
+    return best
+
+
+def checkbox_state(label: str, value: Any) -> bool:
+    """Whether to tick a single checkbox.
+
+    Yes/No-style answers tick or untick it. Any other answer means the checkbox
+    is one option of a choice (e.g. "No, I do not have a disability"): tick it
+    only if its label is that option.
+    """
+    if isinstance(value, bool):
+        return value
+    choices = as_choices(value)
+    answers = {normalize(c) for c in choices}
+    if answers <= {"yes", "y", "true", "1", "checked", "on", "agree", "i agree"}:
+        return True
+    if answers <= {"no", "n", "false", "0", "off", "unchecked"}:
+        return False
+    return best_option([label], choices) is not None
 
 
 def truthy(value: Any) -> bool:

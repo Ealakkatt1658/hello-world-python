@@ -13,6 +13,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page
 
 from job_autofill.filling import Field
+from job_autofill.matching import truthy
 from job_autofill.profile import build_rules
 
 log = logging.getLogger(__name__)
@@ -22,10 +23,13 @@ SUCCESS_TEXT = re.compile(
     r"successfully submitted|congratulations|we have received your application|we've received your application",
     re.I,
 )
+# Only frames that need a human. The invisible reCAPTCHA badge most forms carry is not one.
 CAPTCHA = [
-    'iframe[src*="captcha" i]:not([src*="invisible" i])',
-    'iframe[title*="captcha" i]:not([title*="invisible" i])',
-    'iframe[src*="hcaptcha" i][src*="challenge" i]',
+    'iframe[src*="recaptcha"][src*="bframe"]',  # reCAPTCHA picture challenge
+    'iframe[src*="recaptcha"][src*="anchor"]:not([src*="size=invisible"])',  # "I'm not a robot" box
+    'iframe[src*="hcaptcha"][src*="frame=challenge"]',
+    'iframe[src*="hcaptcha"][src*="frame=checkbox"]',
+    'iframe[src*="challenges.cloudflare.com"]',
     'iframe[title*="challenge" i]',
 ]
 
@@ -36,6 +40,7 @@ class NeedsAttention(Exception):
 
 class BaseApplier:
     SITE = "site"
+    confirm_timeout_ms = 30_000  # how long to wait for the "thank you" page after submitting
     ERRORS: list[str] = ['[role="alert"]']
     JOB_DESCRIPTION: list[str] = ["main", "body"]
 
@@ -99,8 +104,27 @@ class BaseApplier:
                         texts.append(t)
         return texts
 
+    def dismiss_cookie_banner(self) -> None:
+        """Cookie banners can sit on top of the form and swallow clicks."""
+        button = self.first_visible(
+            [
+                '[data-automation-id="legalNoticeAcceptButton"]',
+                "#onetrust-accept-btn-handler",
+                "#truste-consent-button",
+                self.page.get_by_role("button", name=re.compile(r"^\s*(accept|allow)( all)?( cookies)?\s*$", re.I)),
+            ]
+        )
+        if button is not None:
+            try:
+                button.click(timeout=3000)
+                log.info("Closed the cookie banner")
+                self.page.wait_for_timeout(300)
+            except PlaywrightError:
+                pass
+
     # ------------------------------------------------------------------ talking to the user
     def pause(self, message: str) -> None:
+        self.save_debug("paused")
         if not self.interactive:
             raise NeedsAttention(message)
         bar = "=" * 70
@@ -119,18 +143,35 @@ class BaseApplier:
         if self.first_visible(CAPTCHA):
             self.pause("A CAPTCHA is showing. Please solve it.")
 
-    def screenshot(self, name: str) -> None:
+    def _file_stem(self, name: str) -> Optional[Path]:
         if not self.screenshot_dir:
-            return
+            return None
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         host = urlparse(self.page.url).netloc
         company = host.split(".")[0] if host else "application"
-        path = self.screenshot_dir / f"{self.SITE}-{company}-{dt.datetime.now():%Y%m%d-%H%M%S}-{name}.png"
+        return self.screenshot_dir / f"{self.SITE}-{company}-{dt.datetime.now():%Y%m%d-%H%M%S}-{name}"
+
+    def screenshot(self, name: str) -> None:
+        stem = self._file_stem(name)
+        if stem is None:
+            return
         try:
-            self.page.screenshot(path=str(path), full_page=True)
-            log.info("Saved screenshot %s", path)
+            self.page.screenshot(path=f"{stem}.png", full_page=True)
+            log.info("Saved screenshot %s.png", stem)
         except PlaywrightError as exc:
             log.debug("Screenshot failed: %s", exc)
+
+    def save_debug(self, name: str) -> None:
+        """Screenshot + the page's HTML, so a failure on a real site can be diagnosed later."""
+        stem = self._file_stem(name)
+        if stem is None:
+            return
+        try:
+            self.page.screenshot(path=f"{stem}.png", full_page=True)
+            Path(f"{stem}.html").write_text(self.page.content(), encoding="utf-8")
+            log.info("Saved page snapshot %s.png/.html (useful for bug reports)", stem)
+        except (PlaywrightError, OSError) as exc:
+            log.debug("Debug snapshot failed: %s", exc)
 
     # ------------------------------------------------------------------ job description / AI
     def capture_job_description(self) -> None:
@@ -157,8 +198,9 @@ class BaseApplier:
             print("\nThe AI drafted these answers -- check them in the browser before submitting:")
             for label, answer in drafted:
                 print(f"  * {label}\n      {answer.replace(chr(10), chr(10) + '      ')}")
-        must_review = bool(drafted) and (self.profile.get("ai") or {}).get("review_before_submit", True)
+        must_review = bool(drafted) and truthy((self.profile.get("ai") or {}).get("review_before_submit", True))
         if self.auto_submit and not must_review:
+            self.mark_before_submit()
             return True
         answer = self.confirm(
             "\nReview the application in the browser. Type 'submit' to submit it, anything else to skip: "
@@ -166,19 +208,37 @@ class BaseApplier:
         if answer.strip().lower() != "submit":
             log.info("Not submitted.")
             return False
+        self.mark_before_submit()
         return True
 
-    def wait_for_confirmation(self, timeout_ms: int = 30_000) -> bool:
+    def _success_texts(self) -> set[str]:
         try:
-            self.page.get_by_text(SUCCESS_TEXT).first.wait_for(timeout=timeout_ms)
-            return True
+            return {t.strip().lower() for t in self.page.get_by_text(SUCCESS_TEXT).all_inner_texts() if t.strip()}
         except PlaywrightError:
-            return False
+            return set()
+
+    def mark_before_submit(self) -> None:
+        # Job descriptions often already say "thank you for your interest"; only text that
+        # appears *after* clicking submit counts as a confirmation.
+        self._before_submit = self._success_texts()
+
+    def wait_for_confirmation(self, timeout_ms: Optional[int] = None) -> bool:
+        before = getattr(self, "_before_submit", set())
+        timeout_ms = self.confirm_timeout_ms if timeout_ms is None else timeout_ms
+        deadline = dt.datetime.now() + dt.timedelta(milliseconds=timeout_ms)
+        while True:
+            if self._success_texts() - before:
+                return True
+            if self.first_visible(CAPTCHA):
+                self.pause("A CAPTCHA appeared after clicking submit. Solve it (and submit again if needed).")
+                deadline = dt.datetime.now() + dt.timedelta(milliseconds=timeout_ms)
+            if dt.datetime.now() >= deadline:
+                return False
+            self.page.wait_for_timeout(500)
 
     def finish_submit(self) -> bool:
         """After clicking submit: wait for the thank-you page, or ask the user to sort it out."""
         if not self.wait_for_confirmation():
-            self.check_captcha()
             errors = self.visible_errors()
             self.pause(
                 ("Submission was blocked:\n  - " + "\n  - ".join(errors) + "\n" if errors else "")

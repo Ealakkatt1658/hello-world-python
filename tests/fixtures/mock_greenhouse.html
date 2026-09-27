@@ -17,9 +17,12 @@
   <p>Acme Rockets builds reusable launch vehicles. As an intern on the flight software team you will
   write Python and C++ tooling for telemetry, help test guidance code, and ship features used on real
   launches. We value curiosity, ownership and clear communication. Summer 2027, Chicago, IL.</p>
+  <p>Thank you for your interest in Acme Rockets!</p>
 </div>
 <form id="application-form" onsubmit="return false">
   <div id="fields"></div>
+  <div class="field"><label for="hp">Leave this blank</label><input type="text" id="hp" name="hp" style="display:none"></div>
+  <iframe title="reCAPTCHA" src="https://www.google.com/recaptcha/api2/anchor?k=x&amp;size=invisible" srcdoc="<p>badge</p>" width="256" height="60"></iframe>
   <button type="submit" id="submit">Submit application</button>
 </form>
 <script>
@@ -120,6 +123,7 @@ document.getElementById('submit').onclick = () => {
     document.getElementById('application-form').appendChild($(`<div class="helper-text--error">Missing: ${missing.join(', ')}</div>`));
     return;
   }
+  values.__honeypot = document.getElementById('hp').value;
   window.__submitted = values;
   document.body.innerHTML = '<h1>Thank you for applying.</h1><p>Your application has been received.</p>';
 };

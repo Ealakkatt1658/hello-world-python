@@ -20,7 +20,7 @@ from typing import Optional
 import yaml
 
 from job_autofill.filling import Field
-from job_autofill.matching import best_option
+from job_autofill.matching import best_option, truthy
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class AIAnswerer:
     def __init__(self, profile: dict, model: Optional[str] = None, effort: str = "medium", client=None) -> None:
         settings = profile.get("ai") or {}
         self.model = model or settings.get("model") or DEFAULT_MODEL
-        self.effort = settings.get("effort", effort)
+        self.effort = (settings.get("effort") or effort).strip().lower()
         if client is None:
             import anthropic
 
@@ -74,6 +74,7 @@ class AIAnswerer:
         self.job_text = ""
         self.cache: dict[tuple, Optional[str]] = {}
         self.drafted: list[tuple[str, str]] = []  # (question, answer) for the current job
+        self.disabled = False
 
     def set_job(self, url: str, description: str) -> None:
         self.job_url = url
@@ -84,6 +85,8 @@ class AIAnswerer:
         key = (self.job_url, field.label, field.kind, tuple(options))
         if key in self.cache:
             return self.cache[key]
+        if self.disabled:
+            return None
         answer = self._ask(field, options)
         if answer is not None and options:
             idx = best_option(options, answer)
@@ -125,6 +128,22 @@ class AIAnswerer:
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
             )
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+            log.error("AI turned off for this run: your Anthropic API key was rejected (%s). "
+                      "Check ANTHROPIC_API_KEY, or run with --no-ai.", exc.message)
+            self.disabled = True
+            return None
+        except anthropic.NotFoundError:
+            log.error("AI turned off for this run: model %r not found. Check 'ai: model:' in profile.yaml.", self.model)
+            self.disabled = True
+            return None
+        except anthropic.BadRequestError as exc:
+            if "credit" in str(exc.message).lower():
+                log.error("AI turned off for this run: your Anthropic account is out of credits.")
+                self.disabled = True
+            else:
+                log.warning("  AI request rejected: %s", exc.message)
+            return None
         except anthropic.APIConnectionError as exc:
             log.warning("  AI unavailable (network): %s", exc)
             return None
@@ -162,7 +181,7 @@ def _resume_block(path: Optional[str]) -> Optional[dict]:
             "text": "Applicant resume:\n\n" + p.read_text(encoding="utf-8", errors="replace"),
             "cache_control": {"type": "ephemeral"},
         }
-    log.warning("AI can only read PDF or text resumes; %s will not be shown to it.", p.name)
+    log.warning("The AI can only read PDF or .txt resumes, so it won't see %s (it will still be uploaded).", p.name)
     return None
 
 
@@ -171,7 +190,9 @@ def make_answerer(profile: dict, mode: Optional[bool]) -> Optional[AIAnswerer]:
     settings = profile.get("ai") or {}
     if mode is None:
         mode = settings.get("enabled")
-        if mode is None:
+        if mode not in (None, ""):
+            mode = truthy(mode)
+        else:
             mode = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
     if not mode:
         return None

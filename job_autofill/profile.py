@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import getpass
+import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from job_autofill.matching import SKIP, Rule
+from job_autofill.matching import SKIP, Rule, parse_date
+
+log = logging.getLogger(__name__)
 
 
 class ProfileError(Exception):
@@ -22,11 +26,18 @@ def load_profile(path: str | Path) -> dict:
         raise ProfileError(
             f"Profile file {path} not found. Copy profile.example.yaml to {path} and fill it in."
         )
-    with path.open(encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
+    try:
+        with path.open(encoding="utf-8") as fh:
+            # BaseLoader keeps every value as text, exactly as written: an unquoted No stays
+            # "No" (not False) and a ZIP code like 02134 isn't turned into a number.
+            data = yaml.load(fh, Loader=yaml.BaseLoader) or {}
+    except yaml.YAMLError as exc:
+        raise ProfileError(f"{path} isn't valid YAML (check the indentation near the line below):\n{exc}") from exc
+    if not isinstance(data, dict):
+        raise ProfileError(f"{path} should contain sections like 'account:' and 'personal:'.")
 
     for key in ("account", "personal"):
-        if key not in data:
+        if not isinstance(data.get(key), dict):
             raise ProfileError(f"Profile is missing the '{key}' section.")
     for key in ("first_name", "last_name", "email"):
         if not data["personal"].get(key):
@@ -40,6 +51,26 @@ def load_profile(path: str | Path) -> dict:
             if not file.exists():
                 raise ProfileError(f"{key.replace('_', ' ').capitalize()} file {file} not found.")
             data[key] = str(file)
+    if not data.get("resume"):
+        log.warning("No resume set in %s; applications that require one will stop and ask you.", path)
+
+    answers = data.get("answers") or []
+    if not isinstance(answers, list):
+        raise ProfileError("'answers:' should be a list of '- question: ... / answer: ...' items.")
+    for n, item in enumerate(answers, 1):
+        if not isinstance(item, dict) or not item.get("question") or "answer" not in item:
+            raise ProfileError(f"answers item {n} needs both 'question:' and 'answer:'.")
+        try:
+            re.compile(item["question"])
+        except re.error as exc:
+            raise ProfileError(
+                f"answers item {n}: question {item['question']!r} isn't a valid pattern ({exc}). "
+                "Characters like ( ) [ ] ? + need a backslash in front, e.g. \\?"
+            ) from exc
+
+    per = data["personal"]
+    if per.get("email") == "you@example.com" or (per.get("first_name"), per.get("last_name")) == ("Jane", "Doe"):
+        log.warning("profile.yaml still has the example name/email in it -- fill in your own details.")
     return data
 
 
@@ -48,10 +79,11 @@ def account_email(profile: dict) -> str:
 
 
 def account_password(profile: dict) -> str:
-    """Password from $WORKDAY_PASSWORD, then profile.yaml, then an interactive prompt."""
+    """Password from $WORKDAY_PASSWORD, then profile.yaml, then an interactive prompt (asked once)."""
     password = os.environ.get("WORKDAY_PASSWORD") or profile["account"].get("password")
     if not password:
         password = getpass.getpass("Workday account password: ")
+        profile["account"]["password"] = password
     return password
 
 
@@ -119,6 +151,12 @@ def build_rules(profile: dict) -> list[Rule]:
     )
     add(r"relocat", app.get("willing_to_relocate"))
     add(r"(relative|related|family member|friend).*(employ|work)", app.get("relatives_at_company", "No"))
+    edu = (profile.get("education") or [{}])[0]
+    start, end = _date_parts(edu.get("start")), _date_parts(edu.get("end"))
+    add(r"start date month|^start month", _month_choices(start), {"select", "combobox", "dropdown", "text"})
+    add(r"start date year|^start year", start.get("year"), {"select", "combobox", "dropdown", "text"})
+    add(r"end date month|^end month|graduation month", _month_choices(end), {"select", "combobox", "dropdown", "text"})
+    add(r"end date year|^end year|graduation year", end.get("year"), {"select", "combobox", "dropdown", "text"})
     add(r"(expected |anticipated )?graduation (date|year)", app.get("graduation_date"))
     add(r"salary|compensation|pay expectation", app.get("desired_salary"))
     add(r"(earliest )?start date|available to start|availability", app.get("available_start"))
@@ -153,7 +191,6 @@ def build_rules(profile: dict) -> list[Rule]:
         city_state,
         PICK,
     )
-    edu = (profile.get("education") or [{}])[0]
     add(r"^school|university|college|institution", edu.get("school"), PICK)
     add(r"^degree", edu.get("degree"), PICK)
     add(r"discipline|field of study|major", edu.get("field_of_study"), PICK)
@@ -167,6 +204,25 @@ def build_rules(profile: dict) -> list[Rule]:
     add(r"employee id", SKIP)
 
     return rules
+
+
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+           "October", "November", "December"]
+
+
+def _date_parts(value: Any) -> dict[str, str]:
+    try:
+        return parse_date(value) if value and str(value).strip().lower() not in ("present", "current", "now") else {}
+    except ValueError:
+        return {}
+
+
+def _month_choices(parts: dict[str, str]) -> list[str] | None:
+    """A month as the name, then the zero-padded and plain number, whichever the form offers."""
+    if not parts.get("month"):
+        return None
+    m = int(parts["month"])
+    return [_MONTHS[m - 1], f"{m:02d}", str(m)]
 
 
 def work_rules(job: dict) -> list[Rule]:

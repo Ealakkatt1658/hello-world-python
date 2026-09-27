@@ -1,7 +1,9 @@
 import datetime as dt
 
-from job_autofill.matching import SKIP, Rule, best_option, find_answer, parse_date
-from job_autofill.profile import build_rules
+import pytest
+
+from job_autofill.matching import SKIP, Rule, best_option, checkbox_state, find_answer, parse_date
+from job_autofill.profile import ProfileError, build_rules, load_profile
 
 PROFILE = {
     "account": {"email": "a@b.com"},
@@ -59,3 +61,66 @@ def test_parse_date():
     assert parse_date("2025-08") == {"month": "08", "year": "2025"}
     today = dt.date.today()
     assert parse_date("today")["year"] == str(today.year)
+
+
+def test_best_option_words_and_negation():
+    assert best_option(["United Kingdom +44", "United States +1"], "United States of America") == 1
+    assert best_option(["I am a veteran", "I am not a veteran"], "not a protected veteran") == 1
+    assert best_option(["I am a protected veteran"], "not a protected veteran") is None
+    assert best_option(["I don’t wish to answer"], "I don't wish to answer") == 0
+    assert best_option(["Yes", "No"], False) == 1
+
+
+def test_checkbox_state():
+    assert checkbox_state("anything", True) is True
+    assert checkbox_state("anything", "yes") is True
+    assert checkbox_state("anything", "No") is False
+    assert checkbox_state("No, I do not have a disability and have not had one", "No, I do not have a disability")
+    assert not checkbox_state("Yes, I have a disability", "No, I do not have a disability")
+    assert not checkbox_state("I do not want to answer", ["No, I don't have a disability"])
+
+
+def test_profile_yaml_keeps_values_as_written(tmp_path):
+    (tmp_path / "resume.pdf").write_bytes(b"%PDF")
+    path = tmp_path / "profile.yaml"
+    path.write_text(
+        "account: {email: a@b.com}\n"
+        "resume: resume.pdf\n"
+        "personal:\n  first_name: Sam\n  last_name: Lee\n  email: a@b.com\n"
+        "  address: {postal_code: 02134}\n"
+        "application: {previously_worked_here: No, over_18: yes}\n"
+        "self_identification: {accept_terms: true}\n"
+    )
+    profile = load_profile(path)
+    assert profile["personal"]["address"]["postal_code"] == "02134"
+    assert profile["resume"] == str(tmp_path / "resume.pdf")
+    rules = build_rules(profile)
+    assert find_answer(rules, "Postal Code", "text") == "02134"
+    assert find_answer(rules, "Have you previously worked for Acme?", "radio") == "No"
+    assert find_answer(rules, "Are you at least 18 years old?", "radio") == "yes"
+    assert checkbox_state("I agree", find_answer(rules, "I agree to the terms and conditions", "checkbox")) is True
+
+
+def test_profile_errors_are_friendly(tmp_path):
+    path = tmp_path / "profile.yaml"
+    base = "account: {email: a@b.com}\npersonal: {first_name: A, last_name: B, email: a@b.com}\n"
+    path.write_text(base + "answers:\n  - question: 'why (us'\n    answer: x\n")
+    with pytest.raises(ProfileError, match="valid pattern"):
+        load_profile(path)
+    path.write_text(base + "answers:\n  - question: why\n")
+    with pytest.raises(ProfileError, match="needs both"):
+        load_profile(path)
+    path.write_text(base + "resume: missing.pdf\n")
+    with pytest.raises(ProfileError, match="not found"):
+        load_profile(path)
+    path.write_text("personal:\n  first_name: [unclosed\n")
+    with pytest.raises(ProfileError, match="valid YAML"):
+        load_profile(path)
+
+
+def test_education_month_year_rules():
+    profile = {**PROFILE, "education": [{"school": "UIUC", "start": "08/2023", "end": "05/2027"}]}
+    rules = build_rules(profile)
+    assert find_answer(rules, "Start date month", "combobox") == ["August", "08", "8"]
+    assert find_answer(rules, "End date year", "text") == "2027"
+    assert best_option(["01", "05", "08"], find_answer(rules, "End date month", "select")) == 1

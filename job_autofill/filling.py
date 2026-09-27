@@ -46,6 +46,11 @@ class Answerer(Protocol):
     def __call__(self, field: Field, options: list[str]) -> Optional[str]: ...
 
 
+# Answering these can add, remove or re-draw other fields (e.g. "State" appearing after
+# "Country", or "Race" after "Hispanic or Latino? No"), so the page is re-scanned after each.
+RESHAPING = {"dropdown", "select", "combobox", "prompt", "radio", "checkbox", "checkboxes"}
+
+
 def fill_loop(
     list_fields: Callable[[], list[Field]],
     set_field: Callable[[Field, Any], bool],
@@ -53,48 +58,55 @@ def fill_loop(
     answerer: Optional[Answerer] = None,
     read_options: Optional[Callable[[Field], list[str]]] = None,
     overwrite: bool = False,
-    passes: int = 3,
+    max_rounds: int = 60,
 ) -> list[Field]:
     """Fill every field we have an answer for; return required fields still empty."""
     rules = list(rules)
-    done: set[tuple[str, str]] = set()  # (label, kind) already handled, so later passes skip them
+    attempted: set[tuple[str, str, int]] = set()  # each field is tried at most once per call
     unresolved: list[Field] = []
-    for _ in range(passes):
-        progressed = False
+    for _ in range(max_rounds):
+        rescan = False
         unresolved = []
+        seen: dict[tuple[str, str], int] = {}
         for f in list_fields():
-            key = (f.label, f.kind)
-            if key in done and f.kind == "checkbox":
+            n = seen[(f.label, f.kind)] = seen.get((f.label, f.kind), 0) + 1
+            key = (f.label, f.kind, n)
+            missing = f.required and not f.filled and f.kind != "checkbox"
+            if key in attempted:
+                if missing:
+                    unresolved.append(f)
                 continue
             context = f.context if f.kind == "checkbox" else ""
             value = find_answer(rules, f.label, f.kind, context)
             if value is SKIP:
                 continue
+            if f.filled and not overwrite:
+                continue
             ai = False
-            if value is None and answerer and not f.filled and ai_may_answer(f):
+            if value is None and answerer and ai_may_answer(f):
                 options = f.options
                 if not options and read_options and f.kind in ("dropdown", "select", "combobox"):
                     options = read_options(f)
                 value = answerer(f, options)
                 ai = value is not None
             if value is None:
-                if f.required and not f.filled and f.kind != "checkbox":
+                if missing:
                     unresolved.append(f)
                 continue
-            if f.filled and not overwrite:
-                continue
+            attempted.add(key)
             try:
                 ok = set_field(f, value)
             except PlaywrightError as exc:
-                log.warning("Could not fill %r: %s", f.label, exc)
+                log.warning("  Could not fill %r: %s", f.label, str(exc).splitlines()[0])
                 ok = False
             if ok:
-                done.add(key)
-                progressed = True
                 log.info("  %-45s -> %s%s", f.label[:45], _short(value), "  [AI]" if ai else "")
-            elif f.required:
+                if f.kind in RESHAPING:
+                    rescan = True
+                    break
+            elif missing:
                 unresolved.append(f)
-        if not progressed:
+        if not rescan:
             break
     return unresolved
 

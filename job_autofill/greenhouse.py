@@ -9,12 +9,16 @@ import logging
 import re
 from urllib.parse import urlparse
 
+from playwright.sync_api import Error as PlaywrightError
+
 from job_autofill.base import BaseApplier
 from job_autofill.forms import fill_fields, upload_file
 
 log = logging.getLogger(__name__)
 
-FORM = "#application-form, #application_form, form[action*='application']"
+FORMS = ["#application-form", "#application_form", "form[action*='application']"]
+FORM = ", ".join(FORMS)
+SECURITY_CODE = ["input[id*='security' i]", "input[name*='security' i]", "input[aria-label*='security code' i]"]
 
 
 def is_greenhouse_url(url: str) -> bool:
@@ -36,7 +40,8 @@ class GreenhouseApplier(BaseApplier):
         log.info("Opening %s", url)
         self.page.goto(url, wait_until="domcontentloaded")
         self.settle(1000)
-        self.follow_embed()
+        self.dismiss_cookie_banner()
+        self.follow_embed(wait="gh_jid=" in url)
         self.capture_job_description()
         self.open_form()
 
@@ -46,14 +51,26 @@ class GreenhouseApplier(BaseApplier):
         if not self.ok_to_submit():
             return False
         self.click_submit()
-        code = self.first_visible(["input[id*='security' i]", "input[name*='security' i]"], 8000)
-        if code is not None:
-            self.pause(f"Greenhouse emailed a security code to {self.profile['personal']['email']}. Enter it and submit.")
+        # Greenhouse sometimes emails a code that has to be typed in before it accepts the application.
+        for _ in range(20):
+            if self.wait_for_confirmation(500):
+                break
+            if self.first_visible(SECURITY_CODE):
+                self.pause(
+                    f"Greenhouse emailed a security code to {self.profile['personal']['email']}. "
+                    "Type it into the page and click submit."
+                )
+                break
         return self.finish_submit()
 
-    def follow_embed(self) -> None:
+    def follow_embed(self, wait: bool = False) -> None:
         """Company career pages embed the Greenhouse form in an iframe; open it directly."""
         frame = self.page.locator("iframe#grnhse_iframe, iframe[src*='greenhouse.io']")
+        if wait:
+            try:
+                frame.first.wait_for(state="attached", timeout=10_000)
+            except PlaywrightError:
+                log.info("No embedded Greenhouse form found on this page")
         if frame.count():
             src = frame.first.get_attribute("src")
             if src:
@@ -62,7 +79,8 @@ class GreenhouseApplier(BaseApplier):
                 self.settle(1000)
 
     def open_form(self) -> None:
-        if self.first_visible([FORM + " input"]) is not None:
+        form_inputs = [f"{f} input:not([type=hidden])" for f in FORMS]
+        if self.first_visible(form_inputs) is not None:
             return
         apply = self.first_visible(
             [
@@ -74,7 +92,7 @@ class GreenhouseApplier(BaseApplier):
         if apply is not None:
             apply.click()
             self.settle()
-        if self.first_visible([FORM + " input", "input[type=text]"], 10_000) is None:
+        if self.first_visible(form_inputs + ["input[type=text]"], 10_000) is None:
             self.pause("Couldn't find the application form. Open it in the browser.")
 
     def upload_documents(self) -> None:
@@ -92,7 +110,7 @@ class GreenhouseApplier(BaseApplier):
             [
                 "#submit_app",
                 self.page.get_by_role("button", name=re.compile(r"submit( application)?", re.I)),
-                FORM.split(",")[0] + " button[type=submit]",
+                *(f"{f} button[type=submit]" for f in FORMS),
                 "button[type=submit]",
                 "input[type=submit]",
             ],

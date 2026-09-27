@@ -74,6 +74,7 @@ class WorkdayApplier(BaseApplier):
     def open_application(self, url: str) -> None:
         self.page.goto(url, wait_until="domcontentloaded")
         self.settle(1000)
+        self.dismiss_cookie_banner()
         if self.in_application():
             return
         self.capture_job_description()
@@ -107,7 +108,7 @@ class WorkdayApplier(BaseApplier):
         if self.in_application(3000):
             log.info("Already signed in.")
             return
-        if self.first_visible(EMAIL, 15_000) is None:
+        if not self.reveal_email_form():
             if not self.in_application():
                 self.pause("Couldn't find the sign-in form. Sign in (or create an account) manually.")
             return
@@ -127,7 +128,27 @@ class WorkdayApplier(BaseApplier):
         log.info("Sign-in failed; creating a new account.")
         if self.create_account():
             return
-        self.pause("Couldn't sign in or create an account automatically. Please finish signing in.")
+        errors = self.visible_errors()
+        self.pause(
+            ("Workday said:\n  - " + "\n  - ".join(errors) + "\n" if errors else "")
+            + "Couldn't sign in or create an account automatically. Please finish signing in. "
+            "(Workday passwords usually need 8+ characters with an uppercase letter, a number and a symbol.)"
+        )
+
+    def reveal_email_form(self) -> bool:
+        """Wait for the email field; some tenants first show 'Sign in with email' / Google buttons."""
+        email_button = [
+            '[data-automation-id="SignInWithEmailButton"]',
+            '[data-automation-id="signInWithEmailButton"]',
+            self.page.get_by_role("button", name=re.compile(r"(sign in|continue|log in) with email|use (my )?email", re.I)),
+        ]
+        found = self.first_visible(EMAIL + email_button, 15_000)
+        if found is None:
+            return False
+        if self.first_visible(EMAIL) is None:
+            found.click()
+            return self.first_visible(EMAIL, 10_000) is not None
+        return True
 
     def _click_submit(self, label: str, automation_id: str) -> None:
         button = self.first_visible(
@@ -142,34 +163,49 @@ class WorkdayApplier(BaseApplier):
             raise PlaywrightError(f"Couldn't find the {label} button")
         button.click()
 
-    def _wait_auth_result(self, timeout_ms: int = 20_000) -> bool:
-        deadline = dt.datetime.now() + dt.timedelta(milliseconds=timeout_ms)
-        while dt.datetime.now() < deadline:
-            if self.in_application():
-                return True
-            if self.first_visible(EMAIL) is None and self.first_visible(PASSWORD) is None:
-                self.settle()
-                return True  # left the auth page (e.g. back on the job posting)
-            if self.visible_errors():
-                return False
-            self.page.wait_for_timeout(500)
-        return False
-
-    def sign_in(self) -> bool:
-        email, password = account_email(self.profile), account_password(self.profile)
-        self.first_visible(EMAIL, 5000).fill(email)
-        self.first_visible(PASSWORD, 5000).fill(password)
+    def _submit_auth(self, label: str, automation_id: str, creating: bool = False, timeout_ms: int = 20_000) -> str:
+        """Click Sign In / Create Account and wait: 'in', 'error', 'signin' (sent to the
+        sign-in form after creating an account), 'timeout' or 'no-button'."""
+        errors_before = set(self.visible_errors())
         try:
-            self._click_submit("Sign In", "signInSubmitButton")
+            self._click_submit(label, automation_id)
         except PlaywrightError as exc:
             log.warning("%s", exc)
+            return "no-button"
+        deadline = dt.datetime.now() + dt.timedelta(milliseconds=timeout_ms)
+        while dt.datetime.now() < deadline:
+            self.page.wait_for_timeout(500)
+            if self.in_application():
+                return "in"
+            if self.first_visible(EMAIL) is None and self.first_visible(PASSWORD) is None:
+                # The form went away: either we're through, or it's just re-rendering.
+                self.settle()
+                if self.in_application() or (self.first_visible(EMAIL) is None and self.first_visible(PASSWORD) is None):
+                    return "in"
+            if set(self.visible_errors()) - errors_before:
+                return "error"
+            if creating and self.first_visible(VERIFY_PASSWORD) is None and self.first_visible(PASSWORD):
+                return "signin"
+        return "timeout"
+
+    def _fill_credentials(self) -> bool:
+        email_box = self.first_visible(EMAIL, 5000)
+        password_box = self.first_visible(PASSWORD, 5000)
+        if email_box is None or password_box is None:
             return False
-        ok = self._wait_auth_result()
-        if ok:
-            log.info("Signed in as %s", email)
-        else:
-            log.info("Sign-in rejected: %s", "; ".join(self.visible_errors()) or "no response")
-        return ok
+        email_box.fill(account_email(self.profile))
+        password_box.fill(account_password(self.profile))
+        return True
+
+    def sign_in(self) -> bool:
+        if not self._fill_credentials():
+            return False
+        state = self._submit_auth("Sign In", "signInSubmitButton")
+        if state == "in":
+            log.info("Signed in as %s", account_email(self.profile))
+            return True
+        log.info("Sign-in didn't work: %s", "; ".join(self.visible_errors()) or state)
+        return False
 
     def create_account(self) -> bool:
         if not self.first_visible(VERIFY_PASSWORD):
@@ -185,36 +221,37 @@ class WorkdayApplier(BaseApplier):
                 return False
             link.click()
             self.settle()
-        email, password = account_email(self.profile), account_password(self.profile)
-        self.first_visible(EMAIL, 5000).fill(email)
-        self.first_visible(PASSWORD, 5000).fill(password)
+        if not self._fill_credentials():
+            return False
         verify = self.first_visible(VERIFY_PASSWORD, 5000) or self.page.locator('input[type="password"]').nth(1)
-        verify.fill(password)
+        verify.fill(account_password(self.profile))
         consent = self.first_visible(
             ['input[data-automation-id="createAccountCheckbox"]', 'form input[type="checkbox"]']
         )
         if consent is not None:
             consent.set_checked(True, force=True)
         self.check_captcha()
-        try:
-            self._click_submit("Create Account", "createAccountSubmitButton")
-        except PlaywrightError as exc:
-            log.warning("%s", exc)
+        state = self._submit_auth("Create Account", "createAccountSubmitButton", creating=True, timeout_ms=25_000)
+        if state == "no-button":
             return False
-        if self._wait_auth_result(25_000):
+        email = account_email(self.profile)
+        if state == "in":
             log.info("Created account for %s", email)
             return True
+        if state == "error":
+            log.warning("Account creation failed: %s", "; ".join(self.visible_errors()))
+            return False
 
-        body = normalize(self.page.inner_text("body"))
-        if "verif" in body:
+        if "verif" in normalize(self.page.inner_text("body")):
             self.pause(
                 f"Workday sent a verification email to {email}. Click the link in it "
-                "(it can open in any browser)."
+                "(it can open in any browser), then come back here."
             )
-            if self.first_visible(EMAIL, 5000):
-                return self.sign_in()
+        if self.in_application():
             return True
-        log.warning("Account creation failed: %s", "; ".join(self.visible_errors()) or "unknown reason")
+        if self.reveal_email_form():
+            log.info("Account created; signing in.")
+            return self.sign_in()
         return False
 
     # ------------------------------------------------------------------ steps
