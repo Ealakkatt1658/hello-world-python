@@ -19,7 +19,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="python -m job_autofill",
         description="Fill in (and optionally submit) Workday, Greenhouse and Lever job applications from your profile.",
     )
-    parser.add_argument("urls", nargs="*", help="Job posting or application URL(s), each in quotes")
+    parser.add_argument("urls", nargs="*", help="Job posting or application URL(s), each in quotes. Leave out to be asked.")
     parser.add_argument("--check", action="store_true", help="Check your setup (profile, resume, AI key, browser) and exit")
     parser.add_argument("--profile", default="profile.yaml", help="Your profile file (default: profile.yaml)")
     parser.add_argument(
@@ -87,8 +87,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return check_setup(args, profile)
     if not args.urls:
-        print("error: give at least one job link, e.g. python -m job_autofill \"https://...\"", file=sys.stderr)
-        return 2
+        try:
+            pasted = input("Paste the job link (several links: separate them with spaces) and press Enter:\n> ")
+        except (KeyboardInterrupt, EOFError):
+            return 2
+        args.urls = pasted.split()
+        if not args.urls:
+            print("error: no link given", file=sys.stderr)
+            return 2
     not_links = [u for u in args.urls if not u.lower().startswith(("http://", "https://"))]
     if not_links:
         print(

@@ -60,6 +60,9 @@ python -m job_autofill "https://company.wd5.myworkdayjobs.com/en-US/External/job
 **Always put the link in quotes.** Links often contain `&`, which the terminal treats as a
 command separator if the link isn't quoted.
 
+Or just run `python -m job_autofill` with no link. It asks you to paste one, and then you
+don't need quotes.
+
 A browser window opens and you can watch it work:
 
 1. It opens the posting and clicks **Apply → Apply Manually**.
