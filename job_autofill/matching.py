@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -101,3 +102,29 @@ def truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return normalize(str(value)) in {"yes", "y", "true", "1", "checked", "on", "agree", "i agree"}
+
+
+def parse_date(value: Any) -> dict[str, str]:
+    """'today', 'YYYY', 'MM/YYYY', 'MM/DD/YYYY' or 'YYYY-MM[-DD]' -> {'month','day','year'}."""
+    if isinstance(value, (dt.date, dt.datetime)):
+        return {"month": f"{value.month:02d}", "day": f"{value.day:02d}", "year": str(value.year)}
+    text = str(value).strip().lower()
+    if text in ("today", "now"):
+        return parse_date(dt.date.today())
+    m = re.fullmatch(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", text)
+    if m:
+        year, month, day = m.groups()
+    else:
+        parts = re.split(r"[/.\-]", text)
+        if len(parts) == 2:
+            (month, year), day = parts, None
+        elif len(parts) == 3:
+            month, day, year = parts
+        else:
+            raise ValueError(f"Unrecognised date {value!r}; use MM/YYYY, MM/DD/YYYY or YYYY")
+    out = {"year": year}
+    if month:
+        out["month"] = f"{int(month):02d}"
+    if day:
+        out["day"] = f"{int(day):02d}"
+    return out

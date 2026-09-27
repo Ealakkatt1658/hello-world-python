@@ -3,13 +3,20 @@
 Paste a job link and it fills out the application for you. It signs in to the company's
 job site, or creates an account if you don't have one yet. Then it uploads your resume, fills
 in every page, answers the self-identification (gender / race / veteran / disability) questions
-the way you told it to, and submits.
+the way you told it to, and submits. Optionally, Claude drafts answers to open-ended questions
+like "Why do you want to work here?" from your resume and the job posting.
 
-**Supported so far:** Workday (`*.myworkdayjobs.com` / `*.myworkday.com`).
+**Supported sites:**
+
+| Site | Links look like | Account needed? |
+|---|---|---|
+| Workday | `*.myworkdayjobs.com/...`, `*.myworkday.com/...` | Yes (signs in or creates one) |
+| Greenhouse | `boards.greenhouse.io/...`, `job-boards.greenhouse.io/...`, company pages with `?gh_jid=` | No |
+| Lever | `jobs.lever.co/<company>/<id>` (with or without `/apply`) | No |
 
 ## Setup (one time, on your own computer)
 
-You need Python 3.9 or newer.
+You need Python 3.10 or newer.
 
 ```bash
 git clone <this repo> && cd hello-world-python
@@ -52,14 +59,42 @@ You can pass several links at once. Each company's application runs one after an
 python -m job_autofill URL1 URL2 URL3 --auto-submit
 ```
 
+For Greenhouse and Lever there's no sign-in: it opens the form on the job page, uploads
+your resume, fills in everything, and submits the same way.
+
+### AI answers for open-ended questions (optional)
+
+Some questions can't come from a fixed rule, like "Why do you want to work at Acme?",
+"Tell us about a project you're proud of", or a company-specific dropdown. For those, the
+tool can ask Claude to draft an answer. Claude sees your profile, your resume (PDF) and the
+job posting. To turn it on, create an API key at https://console.anthropic.com and set it:
+
+```bash
+export ANTHROPIC_API_KEY='sk-ant-...'
+```
+
+When the key is set, AI answers are on by default. Use `--no-ai` to turn them off for a run,
+or `--ai` to force them on.
+
+* **It doesn't make things up.** It answers only from your profile and resume. If a factual
+  question isn't covered (e.g. "Do you have a security clearance?"), it replies UNKNOWN and
+  the tool asks you instead.
+* **It never answers sensitive questions.** Gender, race, veteran and disability status,
+  consent boxes, criminal history and similar questions come only from your profile, or from you.
+* **You review its answers.** Anything the AI wrote is listed in the terminal and the tool
+  waits for you to type `submit`, even with `--auto-submit`. To turn this off, set
+  `ai: review_before_submit: false` in `profile.yaml`.
+
 ### When it needs you
 
 If it can't do something by itself, it stops and prints **ACTION NEEDED** in the terminal. You
 fix it in the browser and press Enter. This happens when:
 
-* the application asks a required question your profile doesn't answer (it lists which ones),
+* the application asks a required question that neither your profile nor the AI can answer
+  (it lists which ones),
 * a CAPTCHA shows up,
-* Workday rejects a page (it shows you the error messages).
+* the site rejects a page (it shows you the error messages),
+* Greenhouse emails you a security code to enter before it accepts the application.
 
 To stop it asking the same question again, add the answer under `answers:` in `profile.yaml`.
 `question` is matched against the question's text and is case-insensitive:
@@ -82,7 +117,8 @@ nested menus one level at a time.
 | Flag | What it does |
 |---|---|
 | `--profile PATH` | Use a different profile file (default `profile.yaml`) |
-| `--auto-submit` | Submit without asking you first |
+| `--auto-submit` | Submit without asking you first (it still asks if the AI wrote any answers) |
+| `--ai` / `--no-ai` | Force AI-drafted answers on or off (default: on if `ANTHROPIC_API_KEY` is set) |
 | `--channel chrome` | Use your installed Google Chrome instead of Playwright's Chromium |
 | `--browser-dir DIR` | Where cookies are saved, so you stay signed in between runs (default `.browser-profile`) |
 | `--slow-mo MS` | Slow each browser action down (default 50 ms) |
@@ -92,11 +128,20 @@ Screenshots of each Review page and each confirmation page are saved in `screens
 
 ## How it works
 
-`job_autofill/workday/fields.py` does **not** depend on each company's form layout. It lists
-every field on the page along with its label and works out what kind of field it is: text box,
-"Select One" dropdown, searchable picker, radio buttons, checkboxes or a date. Then it looks the
-label up in the rules built from your profile (`job_autofill/profile.py`) and fills it in.
-Anything you've already filled is left alone.
+The code doesn't depend on any one company's form layout. On every page it lists each field
+along with its question text and works out what kind of field it is: text box, dropdown,
+searchable picker, radio buttons, checkboxes or a date. It looks the question up in the rules
+built from your profile (`job_autofill/profile.py`), asks the AI if nothing matches, and fills
+the field in. Anything already filled is left alone. It then repeats the pass, so questions
+that only appear after an earlier answer get filled too.
+
+| File | What it does |
+|---|---|
+| `job_autofill/filling.py` | The fill loop shared by every site, plus the list of questions the AI may not answer |
+| `job_autofill/workday/` | Workday: sign-in and account creation, multi-step navigation, Workday's widgets |
+| `job_autofill/forms.py` | Standard HTML forms: native selects, React-Select comboboxes, radio/checkbox groups |
+| `job_autofill/greenhouse.py`, `lever.py` | The Greenhouse and Lever flows |
+| `job_autofill/ai.py` | Drafting answers with Claude |
 
 ## Development
 
@@ -105,5 +150,6 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The tests run the whole flow against `tests/fixtures/mock_workday.html`, a local copy of
-Workday's markup and widgets. No real applications are submitted.
+The tests run each whole flow against local copies of Workday's, Greenhouse's and Lever's
+forms in `tests/fixtures/`. The AI is replaced with a fake, so the tests don't need an API key
+and never submit a real application.

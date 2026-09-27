@@ -9,7 +9,8 @@ account:
   # or leave both blank to be asked each run.
   password: ""
 
-resume: ./resume.pdf          # path relative to this file
+resume: ./resume.pdf          # path relative to this file (PDF, so the AI can read it too)
+cover_letter: ""              # optional file, uploaded where a site asks for one
 
 personal:
   first_name: Jane
@@ -94,3 +95,13 @@ answers:
     answer: "3.8"
   - question: "(school|university|college) (are you|do you) (currently )?attend"
     answer: "University of Illinois Urbana-Champaign"
+
+# AI-drafted answers for questions none of the rules above cover (e.g. "Why do you want to
+# work here?"). Needs an Anthropic API key in ANTHROPIC_API_KEY. It only uses facts from this
+# profile and your resume; if it can't tell, it asks you instead of guessing. It never answers
+# self-identification, legal or consent questions.
+ai:
+  # enabled: true             # default: on when ANTHROPIC_API_KEY is set; false = never (same as --no-ai)
+  model: claude-opus-5
+  effort: medium              # low | medium | high -- higher is more thorough but slower
+  review_before_submit: true  # always stop for your OK when the AI wrote something, even with --auto-submit

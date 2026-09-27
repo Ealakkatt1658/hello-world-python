@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import re
-from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page
 
-from job_autofill.matching import SKIP, Rule, as_choices, best_option, find_answer, truthy
+from job_autofill.filling import Answerer, Field, fill_loop, pick_from_list, visible_options
+from job_autofill.matching import Rule, as_choices, best_option, parse_date, truthy
 
 log = logging.getLogger(__name__)
 
@@ -148,18 +147,6 @@ _TAG_ADD_BUTTON_JS = r"""
 """
 
 
-@dataclass
-class Field:
-    id: str
-    kind: str
-    label: str
-    required: bool
-    filled: bool
-    current: str
-    context: str
-    options: list[str]
-
-
 def list_fields(page: Page, scope: Optional[str] = None) -> list[Field]:
     return [Field(**f) for f in page.evaluate(_LIST_FIELDS_JS, scope)]
 
@@ -168,38 +155,43 @@ def fill_fields(
     page: Page,
     rules: Iterable[Rule],
     scope: Optional[str] = None,
+    answerer: Optional[Answerer] = None,
     overwrite: bool = False,
 ) -> list[Field]:
-    """Fill every visible field whose label matches a rule.
+    """Fill every visible field we have an answer for.
 
     Returns required fields that are still empty afterwards (no answer, or the
     answer didn't fit any option) so the caller can ask the user about them.
     """
-    rules = list(rules)
-    unresolved: list[Field] = []
-    for field in list_fields(page, scope):
-        context = field.context if field.kind == "checkbox" else ""
-        value = find_answer(rules, field.label, field.kind, context)
-        if value is SKIP:
-            continue
-        if value is None:
-            if field.required and not field.filled and field.kind != "checkbox":
-                unresolved.append(field)
-            continue
-        if field.filled and not overwrite:
-            continue
-        try:
-            ok = set_field(page, field, value)
-        except PlaywrightError as exc:
-            log.warning("Could not fill %r: %s", field.label, exc)
-            ok = False
-        if ok:
-            log.info("  %-45s -> %s", field.label[:45], value)
-        elif field.required:
-            unresolved.append(field)
+
+    def set_one(field: Field, value: Any) -> bool:
+        ok = set_field(page, field, value)
         # Selecting one option can reveal new fields (e.g. "State" after "Country").
         page.wait_for_timeout(150)
-    return unresolved
+        return ok
+
+    return fill_loop(
+        lambda: list_fields(page, scope),
+        set_one,
+        rules,
+        answerer=answerer,
+        read_options=lambda f: read_dropdown_options(page, f),
+        overwrite=overwrite,
+    )
+
+
+def read_dropdown_options(page: Page, field: Field) -> list[str]:
+    if field.kind != "dropdown":
+        return []
+    page.locator(f'[data-af-id="{field.id}"] button[aria-haspopup="listbox"]').first.click()
+    options = visible_options(page, '[role="listbox"] [role="option"]')
+    try:
+        options.first.wait_for(state="visible", timeout=3000)
+        texts = [t.strip() for t in options.all_inner_texts()]
+    except PlaywrightError:
+        texts = []
+    page.keyboard.press("Escape")
+    return [t for t in texts if t and t.lower() != "select one"]
 
 
 def set_field(page: Page, field: Field, value: Any) -> bool:
@@ -233,27 +225,9 @@ def _set_text(box: Locator, value: Any) -> bool:
     return True
 
 
-def _visible_options(page: Page, selector: str) -> Locator:
-    return page.locator(f"{selector} >> visible=true")
-
-
-def _pick_from_list(page: Page, options: Locator, wanted: Any, timeout: int = 5000) -> bool:
-    try:
-        options.first.wait_for(state="visible", timeout=timeout)
-    except PlaywrightError:
-        return False
-    texts = options.all_inner_texts()
-    idx = best_option(texts, wanted)
-    if idx is None:
-        log.warning("  No option matching %r among %s", wanted, texts[:15])
-        return False
-    options.nth(idx).click()
-    return True
-
-
 def _set_dropdown(page: Page, box: Locator, value: Any) -> bool:
     box.locator('button[aria-haspopup="listbox"]').first.click()
-    ok = _pick_from_list(page, _visible_options(page, '[role="listbox"] [role="option"]'), value)
+    ok = pick_from_list(page, visible_options(page, '[role="listbox"] [role="option"]'), value)
     if not ok:
         page.keyboard.press("Escape")
     return ok
@@ -262,14 +236,14 @@ def _set_dropdown(page: Page, box: Locator, value: Any) -> bool:
 def set_prompt(page: Page, box: Locator, value: Any) -> bool:
     """Searchable picker. ``"Job Board > LinkedIn"`` walks a category tree."""
     inp = box.locator("input").first
-    options = _visible_options(page, '[data-automation-id="promptOption"], [role="option"]')
+    options = visible_options(page, '[data-automation-id="promptOption"], [role="option"]')
     choices = as_choices(value)
     path = [p.strip() for p in choices[0].split(">")] if len(choices) == 1 and ">" in choices[0] else None
 
     if path:
         inp.click()
         for step in path:
-            if not _pick_from_list(page, options, step):
+            if not pick_from_list(page, options, step):
                 page.keyboard.press("Escape")
                 return False
             page.wait_for_timeout(500)
@@ -280,46 +254,19 @@ def set_prompt(page: Page, box: Locator, value: Any) -> bool:
             inp.fill(choice)
             inp.press("Enter")
             page.wait_for_timeout(800)
-            if _pick_from_list(page, options, choice, timeout=3000):
+            if pick_from_list(page, options, choice, timeout=3000):
                 ok = True
                 break
             inp.fill("")
         if not ok:
             # Some pickers don't search; browse the top-level list instead.
             inp.click()
-            if not _pick_from_list(page, options, choices, timeout=3000):
+            if not pick_from_list(page, options, choices, timeout=3000):
                 page.keyboard.press("Escape")
                 return False
     page.wait_for_timeout(300)
     page.keyboard.press("Tab")
     return True
-
-
-def parse_date(value: Any) -> dict[str, str]:
-    """'today', 'YYYY', 'MM/YYYY', 'MM/DD/YYYY' or 'YYYY-MM[-DD]' -> {'month','day','year'}."""
-    if isinstance(value, (dt.date, dt.datetime)):
-        d = value
-        return {"month": f"{d.month:02d}", "day": f"{d.day:02d}", "year": str(d.year)}
-    text = str(value).strip().lower()
-    if text in ("today", "now"):
-        return parse_date(dt.date.today())
-    m = re.fullmatch(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", text)
-    if m:
-        year, month, day = m.groups()
-    else:
-        parts = re.split(r"[/.\-]", text)
-        if len(parts) == 2:
-            (month, year), day = parts, None
-        elif len(parts) == 3:
-            month, day, year = parts
-        else:
-            raise ValueError(f"Unrecognised date {value!r}; use MM/YYYY, MM/DD/YYYY or YYYY")
-    out = {"year": year}
-    if month:
-        out["month"] = f"{int(month):02d}"
-    if day:
-        out["day"] = f"{int(day):02d}"
-    return out
 
 
 def _set_date(box: Locator, value: Any) -> bool:

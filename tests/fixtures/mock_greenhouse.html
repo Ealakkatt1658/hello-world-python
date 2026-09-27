@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mock Greenhouse</title>
+<style>
+  body { font-family: sans-serif; margin: 20px; }
+  .field { margin: 10px 0; }
+  .select__control { border: 1px solid #999; display: inline-block; min-width: 300px; }
+  .select__menu { border: 1px solid #333; background: #fff; }
+  .select__option { padding: 2px 6px; }
+</style>
+</head>
+<body>
+<div class="job__description">
+  <h1>Rocket Software Intern</h1>
+  <p>Acme Rockets builds reusable launch vehicles. As an intern on the flight software team you will
+  write Python and C++ tooling for telemetry, help test guidance code, and ship features used on real
+  launches. We value curiosity, ownership and clear communication. Summer 2027, Chicago, IL.</p>
+</div>
+<form id="application-form" onsubmit="return false">
+  <div id="fields"></div>
+  <button type="submit" id="submit">Submit application</button>
+</form>
+<script>
+const $ = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+const fields = document.getElementById('fields');
+let uid = 0;
+
+function text(id, label, required = true, tag = 'input') {
+  const el = $(`<div class="field"><label for="${id}">${label}${required ? '<span>*</span>' : ''}</label>
+    <${tag} id="${id}" name="${id}" ${tag === 'input' ? 'type="text"' : ''} ${required ? 'aria-required="true"' : ''}></${tag}></div>`);
+  el.dataset.key = label;
+  return el;
+}
+
+// React-Select lookalike: label + control with an input[role=combobox] and a single-value div.
+function combo(label, options, required = true, delayMs = 0, onChange = null) {
+  const id = 'q' + (++uid);
+  const el = $(`<div class="field"><label id="${id}-label" for="${id}">${label}${required ? '<span>*</span>' : ''}</label>
+    <div class="select__control"><div class="select__value-container"><div class="select__single-value"></div>
+    <input id="${id}" role="combobox" aria-labelledby="${id}-label" ${required ? 'aria-required="true"' : ''} autocomplete="off"></div></div></div>`);
+  el.dataset.key = label;
+  const input = el.querySelector('input');
+  const value = el.querySelector('.select__single-value');
+  const show = () => {
+    el.querySelectorAll('.select__menu').forEach(m => m.remove());
+    const q = input.value.toLowerCase();
+    const render = () => {
+      const menu = $('<div class="select__menu" role="listbox"></div>');
+      for (const o of options.filter(o => o.toLowerCase().includes(q))) {
+        const opt = $(`<div class="select__option" role="option">${o}</div>`);
+        opt.onclick = () => { value.textContent = o; input.value = ''; menu.remove(); onChange && onChange(o); };
+        menu.appendChild(opt);
+      }
+      el.querySelectorAll('.select__menu').forEach(m => m.remove());
+      el.appendChild(menu);
+    };
+    delayMs ? setTimeout(render, delayMs) : render();
+  };
+  input.addEventListener('focus', show);
+  input.addEventListener('click', show);
+  input.addEventListener('input', show);
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') el.querySelectorAll('.select__menu').forEach(m => m.remove()); });
+  return el;
+}
+
+function file(id, label) {
+  const el = $(`<div class="field"><div class="label">${label}<span>*</span></div><button type="button">Attach</button>
+    <input type="file" id="${id}" style="display:none"><span class="filename"></span></div>`);
+  el.dataset.key = label;
+  el.querySelector('input').onchange = (e) => { el.querySelector('.filename').textContent = e.target.files[0].name; };
+  return el;
+}
+
+function consent(label) {
+  const el = $(`<div class="field"><input type="checkbox" id="consent" aria-required="true"><label for="consent">${label}</label></div>`);
+  el.dataset.key = label;
+  return el;
+}
+
+[
+  text('first_name', 'First Name'), text('last_name', 'Last Name'), text('email', 'Email'), text('phone', 'Phone'),
+  combo('Country', ['Canada', 'United States', 'United States Minor Outlying Islands']),
+  combo('Location (City)', ['Springfield, Illinois, United States', 'Springfield, Missouri, United States'], true, 300),
+  file('resume', 'Resume/CV'),
+  text('linkedin', 'LinkedIn Profile', false),
+  text('website', 'Website', false),
+  text('why', 'Why do you want to work at Acme Rockets?', true, 'textarea'),
+  text('rust', 'How many years of Rust experience do you have?', false),
+  combo('Are you legally authorized to work in the United States?', ['Yes', 'No']),
+  combo('Will you now or in the future require sponsorship for employment visa status?', ['Yes', 'No']),
+  combo('Gender', ['Male', 'Female', 'Decline To Self Identify'], false),
+  combo('Are you Hispanic/Latino?', ['Yes', 'No', 'Decline To Self Identify'], false, 0, (v) => {
+    document.querySelectorAll('[data-key="Please identify your race"]').forEach(e => e.remove());
+    if (v === 'No') hispanic.after(combo('Please identify your race', ['Asian', 'White', 'Black or African American', 'Decline To Self Identify'], false));
+  }),
+  combo('Veteran Status', ['I am a veteran', 'I am not a protected veteran', "I don't wish to answer"], false),
+  combo('Disability Status', ['Yes, I have a disability', "No, I don't have a disability", "I don't wish to answer"], false),
+  consent('I consent to the Acme Rockets candidate privacy notice'),
+].forEach(f => fields.appendChild(f));
+const hispanic = document.querySelector('[data-key="Are you Hispanic/Latino?"]');
+
+function read(el) {
+  const f = el.querySelector('input[type=file]'); if (f) return f.files.length ? f.files[0].name : '';
+  const sv = el.querySelector('.select__single-value'); if (sv) return sv.textContent;
+  const cb = el.querySelector('input[type=checkbox]'); if (cb) return cb.checked;
+  return el.querySelector('input, textarea').value;
+}
+
+document.getElementById('submit').onclick = () => {
+  document.querySelectorAll('.helper-text--error').forEach(e => e.remove());
+  const values = {}, missing = [];
+  for (const el of document.querySelectorAll('[data-key]')) {
+    values[el.dataset.key] = read(el);
+    const req = el.querySelector('span') && el.querySelector('label, .label').textContent.includes('*') || el.querySelector('[aria-required="true"]');
+    if (req && (values[el.dataset.key] === '' || values[el.dataset.key] === false)) missing.push(el.dataset.key);
+  }
+  if (missing.length) {
+    document.getElementById('application-form').appendChild($(`<div class="helper-text--error">Missing: ${missing.join(', ')}</div>`));
+    return;
+  }
+  window.__submitted = values;
+  document.body.innerHTML = '<h1>Thank you for applying.</h1><p>Your application has been received.</p>';
+};
+</script>
+</body>
+</html>

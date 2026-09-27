@@ -1,8 +1,7 @@
 import datetime as dt
 
-from job_autofill.matching import SKIP, Rule, best_option, find_answer
+from job_autofill.matching import SKIP, Rule, best_option, find_answer, parse_date
 from job_autofill.profile import build_rules
-from job_autofill.workday.fields import parse_date
 
 PROFILE = {
     "account": {"email": "a@b.com"},

@@ -6,22 +6,17 @@ import datetime as dt
 import logging
 import re
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import Locator
 
+from job_autofill.base import BaseApplier
+from job_autofill.filling import Field
 from job_autofill.matching import normalize
-from job_autofill.profile import (
-    account_email,
-    account_password,
-    build_rules,
-    education_rules,
-    website_rules,
-    work_rules,
-)
-from job_autofill.workday.fields import Field, click_add, fill_fields, list_fields, set_prompt, tag_group
+from job_autofill.profile import account_email, account_password, education_rules, website_rules, work_rules
+from job_autofill.workday.fields import click_add, fill_fields, list_fields, set_prompt, tag_group
 
 log = logging.getLogger(__name__)
 
@@ -33,17 +28,6 @@ APP_MARKERS = [
 EMAIL = ['input[data-automation-id="email"]', 'input[type="email"]', 'input[autocomplete="email"]']
 PASSWORD = ['input[data-automation-id="password"]', 'input[type="password"]']
 VERIFY_PASSWORD = ['input[data-automation-id="verifyPassword"]']
-ERRORS = [
-    '[data-automation-id="errorMessage"]',
-    '[data-automation-id="errorBanner"]',
-    '[data-automation-id="inputAlert"]',
-    '[role="alert"]',
-]
-SUCCESS_TEXT = re.compile(
-    r"application (has been )?submitted|thank you for (applying|your application)|successfully submitted|"
-    r"congratulations|we have received your application",
-    re.I,
-)
 
 _STEP_JS = r"""
 () => {
@@ -55,89 +39,23 @@ _STEP_JS = r"""
 """
 
 
-class NeedsAttention(Exception):
-    """Raised instead of pausing when running non-interactively."""
-
-
 def is_workday_url(url: str) -> bool:
     host = urlparse(url).netloc.lower()
     return "myworkdayjobs.com" in host or "myworkday.com" in host or "workday" in host
 
 
-class WorkdayApplier:
-    def __init__(
-        self,
-        page: Page,
-        profile: dict,
-        auto_submit: bool = False,
-        interactive: bool = True,
-        screenshot_dir: Optional[Path] = Path("screenshots"),
-        confirm: Callable[[str], str] = input,
-    ) -> None:
-        self.page = page
-        self.profile = profile
-        self.auto_submit = auto_submit
-        self.interactive = interactive
-        self.screenshot_dir = screenshot_dir
-        self.confirm = confirm
-        self.rules = build_rules(profile)
-
-    # ------------------------------------------------------------------ helpers
-    def settle(self, extra_ms: int = 500) -> None:
-        try:
-            self.page.wait_for_load_state("networkidle", timeout=8000)
-        except PlaywrightError:
-            pass
-        self.page.wait_for_timeout(extra_ms)
-
-    def first_visible(self, candidates: list, timeout_ms: int = 0) -> Optional[Locator]:
-        """First visible match among CSS selectors / Locators, polling up to ``timeout_ms``."""
-        deadline = dt.datetime.now() + dt.timedelta(milliseconds=timeout_ms)
-        while True:
-            for cand in candidates:
-                loc = self.page.locator(cand) if isinstance(cand, str) else cand
-                try:
-                    for i in range(min(loc.count(), 5)):
-                        if loc.nth(i).is_visible():
-                            return loc.nth(i)
-                except PlaywrightError:
-                    continue
-            if dt.datetime.now() >= deadline:
-                return None
-            self.page.wait_for_timeout(250)
+class WorkdayApplier(BaseApplier):
+    SITE = "workday"
+    ERRORS = [
+        '[data-automation-id="errorMessage"]',
+        '[data-automation-id="errorBanner"]',
+        '[data-automation-id="inputAlert"]',
+        '[role="alert"]',
+    ]
+    JOB_DESCRIPTION = ['[data-automation-id="jobPostingDescription"]', '[data-automation-id="job-posting-details"]', "main"]
 
     def in_application(self, timeout_ms: int = 0) -> bool:
         return self.first_visible(APP_MARKERS, timeout_ms) is not None
-
-    def visible_errors(self) -> list[str]:
-        texts = []
-        for sel in ERRORS:
-            loc = self.page.locator(sel)
-            for i in range(loc.count()):
-                if loc.nth(i).is_visible():
-                    t = loc.nth(i).inner_text().strip()
-                    if t and t not in texts:
-                        texts.append(t)
-        return texts
-
-    def pause(self, message: str) -> None:
-        if not self.interactive:
-            raise NeedsAttention(message)
-        bar = "=" * 70
-        print(f"\n{bar}\nACTION NEEDED: {message}\n{bar}")
-        self.confirm("Do it in the browser window, then press Enter here to continue... ")
-
-    def screenshot(self, name: str) -> None:
-        if not self.screenshot_dir:
-            return
-        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
-        company = urlparse(self.page.url).netloc.split(".")[0] or "application"
-        path = self.screenshot_dir / f"{company}-{dt.datetime.now():%Y%m%d-%H%M%S}-{name}.png"
-        try:
-            self.page.screenshot(path=str(path), full_page=True)
-            log.info("Saved screenshot %s", path)
-        except PlaywrightError as exc:
-            log.debug("Screenshot failed: %s", exc)
 
     # ------------------------------------------------------------------ flow
     def run(self, url: str) -> bool:
@@ -158,6 +76,7 @@ class WorkdayApplier:
         self.settle(1000)
         if self.in_application():
             return
+        self.capture_job_description()
         apply = self.first_visible(
             [
                 '[data-automation-id="adventureButton"]',
@@ -209,10 +128,6 @@ class WorkdayApplier:
         if self.create_account():
             return
         self.pause("Couldn't sign in or create an account automatically. Please finish signing in.")
-
-    def check_captcha(self) -> None:
-        if self.first_visible(['iframe[src*="captcha" i]', 'iframe[title*="captcha" i]']):
-            self.pause("A CAPTCHA is showing. Please solve it.")
 
     def _click_submit(self, label: str, automation_id: str) -> None:
         button = self.first_visible(
@@ -330,13 +245,7 @@ class WorkdayApplier:
                 return
             step = self.current_step()
             log.info("Step: %s", step)
-            unresolved = self.fill_step(step)
-            if unresolved:
-                self.pause(
-                    "These required questions have no answer in your profile (add them to "
-                    "`answers:` in profile.yaml for next time). Fill them in:\n  - "
-                    + "\n  - ".join(f"{f.label or '(no label)'} [{f.kind}]" for f in unresolved)
-                )
+            self.report_unresolved(self.fill_step(step))
             self.go_next(step)
         self.pause("Too many steps; please finish the application manually.")
 
@@ -361,7 +270,7 @@ class WorkdayApplier:
         self.upload_resume()
         if "experience" in step:
             unresolved += self.fill_experience()
-        unresolved += fill_fields(self.page, self.rules)
+        unresolved += fill_fields(self.page, self.rules, answerer=self.answerer)
         return unresolved
 
     def upload_resume(self) -> None:
@@ -428,37 +337,12 @@ class WorkdayApplier:
                 log.warning("  Couldn't add skill %s: %s", skill, exc)
 
     # ------------------------------------------------------------------ submit
-    def wait_for_confirmation(self, timeout_ms: int = 30_000) -> bool:
-        try:
-            self.page.get_by_text(SUCCESS_TEXT).first.wait_for(timeout=timeout_ms)
-            return True
-        except PlaywrightError:
-            return False
-
     def submit(self) -> bool:
-        self.screenshot("review")
-        if not self.auto_submit:
-            answer = self.confirm(
-                "\nReview the application in the browser. Type 'submit' to submit it, anything else to skip: "
-            )
-            if answer.strip().lower() != "submit":
-                log.info("Not submitted.")
-                return False
+        if not self.ok_to_submit():
+            return False
         button = self.next_button()
         if button is None or normalize(button.inner_text()) != "submit":
             self.pause("Couldn't find the Submit button. Click Submit yourself.")
         else:
             button.click()
-        if not self.wait_for_confirmation():
-            errors = self.visible_errors()
-            self.pause(
-                ("Submission was blocked:\n  - " + "\n  - ".join(errors) + "\n" if errors else "")
-                + "Finish submitting in the browser if it isn't done."
-            )
-            if not self.wait_for_confirmation(5000):
-                log.warning("Didn't see a confirmation message; check the browser.")
-                self.screenshot("after-submit")
-                return False
-        log.info("Application submitted!")
-        self.screenshot("submitted")
-        return True
+        return self.finish_submit()

@@ -140,3 +140,20 @@ def test_unanswered_required_question_needs_attention(page, mock_workday_url, pr
     applier = WorkdayApplier(page, profile, auto_submit=True, interactive=False, screenshot_dir=None)
     with pytest.raises(NeedsAttention, match="legally authorized"):
         applier.run(mock_workday_url)
+
+
+def test_ai_answers_unknown_dropdown(page, mock_workday_url, profile, tmp_path):
+    from job_autofill.ai import AIAnswerer
+    from tests.fakes import FakeClaude
+
+    profile["answers"] = []  # no rule for the non-compete question any more
+    claude = FakeClaude({"non-compete": "No"})
+    applier = WorkdayApplier(
+        page, profile, auto_submit=True, interactive=False, screenshot_dir=None,
+        confirm=lambda _: "submit", answerer=AIAnswerer(profile, client=claude),
+    )
+    assert applier.run(mock_workday_url) is True
+    assert page.evaluate("window.__submitted")["Do you have a non-compete agreement?"] == "No"
+    # The AI was shown the dropdown's real options.
+    asked = [q for q in claude.questions() if "non-compete" in q]
+    assert asked and "- Yes\n- No" in asked[0]

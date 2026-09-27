@@ -32,14 +32,14 @@ def load_profile(path: str | Path) -> dict:
         if not data["personal"].get(key):
             raise ProfileError(f"Profile is missing personal.{key}.")
 
-    resume = data.get("resume")
-    if resume:
-        resume_path = Path(resume).expanduser()
-        if not resume_path.is_absolute():
-            resume_path = (path.parent / resume_path).resolve()
-        if not resume_path.exists():
-            raise ProfileError(f"Resume file {resume_path} not found.")
-        data["resume"] = str(resume_path)
+    for key in ("resume", "cover_letter"):
+        if data.get(key):
+            file = Path(data[key]).expanduser()
+            if not file.is_absolute():
+                file = (path.parent / file).resolve()
+            if not file.exists():
+                raise ProfileError(f"{key.replace('_', ' ').capitalize()} file {file} not found.")
+            data[key] = str(file)
     return data
 
 
@@ -137,6 +137,27 @@ def build_rules(profile: dict) -> list[Rule]:
         si.get("accept_terms", True),
         {"checkbox"},
     )
+
+    # --- Single-page forms (Greenhouse, Lever) -----------------------------------
+    PICK = {"text", "select", "combobox", "dropdown", "prompt"}
+    jobs = profile.get("work_experience") or []
+    current_job = next(
+        (j for j in jobs if str(j.get("end", "")).strip().lower() in {"present", "current", "now", ""}),
+        jobs[0] if jobs else {},
+    )
+    add(r"current (company|employer)|^org(ani[sz]ation)?$", current_job.get("company"), TEXT)
+    add(r"current (job )?(title|role|position)", current_job.get("title"), TEXT)
+    city_state = ", ".join(p for p in (addr.get("city"), addr.get("state")) if p)
+    add(
+        r"^(current )?location|location \(city\)|where are you (currently )?(located|based)|city,? (and )?state",
+        city_state,
+        PICK,
+    )
+    edu = (profile.get("education") or [{}])[0]
+    add(r"^school|university|college|institution", edu.get("school"), PICK)
+    add(r"^degree", edu.get("degree"), PICK)
+    add(r"discipline|field of study|major", edu.get("field_of_study"), PICK)
+    add(r"\bgpa\b|grade point", edu.get("gpa"), TEXT)
 
     # --- Self Identify (disability form) page -----------------------------------
     full_name = " ".join(p for p in (per.get("first_name"), per.get("last_name")) if p)

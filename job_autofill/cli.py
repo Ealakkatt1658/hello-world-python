@@ -16,7 +16,7 @@ log = logging.getLogger("job_autofill")
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m job_autofill",
-        description="Fill in (and optionally submit) Workday job applications from your profile.",
+        description="Fill in (and optionally submit) Workday, Greenhouse and Lever job applications from your profile.",
     )
     parser.add_argument("urls", nargs="+", help="Job posting or application URL(s)")
     parser.add_argument("--profile", default="profile.yaml", help="Your profile file (default: profile.yaml)")
@@ -25,6 +25,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Submit without asking first. By default it stops on the Review page and waits for you to type 'submit'.",
     )
+    ai = parser.add_mutually_exclusive_group()
+    ai.add_argument(
+        "--ai",
+        dest="ai",
+        action="store_true",
+        default=None,
+        help="Let Claude draft answers to questions your profile doesn't cover (needs ANTHROPIC_API_KEY). "
+        "On by default when ANTHROPIC_API_KEY is set.",
+    )
+    ai.add_argument("--no-ai", dest="ai", action="store_false", help="Never use AI; ask me instead")
     parser.add_argument("--headless", action="store_true", help="Hide the browser window (not recommended)")
     parser.add_argument(
         "--browser-dir",
@@ -52,12 +62,14 @@ def main(argv: list[str] | None = None) -> int:
 
     from playwright.sync_api import sync_playwright
 
-    from job_autofill.workday import WorkdayApplier, is_workday_url
+    from job_autofill.ai import make_answerer
+    from job_autofill.sites import SUPPORTED, applier_for
 
-    unsupported = [u for u in args.urls if not is_workday_url(u)]
+    unsupported = [u for u in args.urls if applier_for(u) is None]
     if unsupported:
-        print("error: only Workday applications are supported so far:\n  " + "\n  ".join(unsupported), file=sys.stderr)
+        print(f"error: only {SUPPORTED} applications are supported so far:\n  " + "\n  ".join(unsupported), file=sys.stderr)
         return 2
+    answerer = make_answerer(profile, args.ai)
 
     results: dict[str, str] = {}
     with sync_playwright() as p:
@@ -71,8 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(15_000)
-        applier = WorkdayApplier(page, profile, auto_submit=args.auto_submit)
         for url in args.urls:
+            applier = applier_for(url)(page, profile, auto_submit=args.auto_submit, answerer=answerer)
             try:
                 results[url] = "submitted" if applier.run(url) else "not submitted"
             except KeyboardInterrupt:
