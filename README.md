@@ -14,7 +14,11 @@ like "Why do you want to work here?" from your resume and the job posting.
    school, resume, ...). To add your resume, drag the PDF into the window when it asks.
    * If Python isn't installed, it opens the download page. Install it, then double-click SETUP
      again. On Windows, tick **"Add python.exe to PATH"** in the installer.
-   * Mac: if it says the file "can't be opened", right-click it → **Open** → **Open**.
+   * **Mac says it "can't be opened" or "Apple could not verify" it:** open the **Terminal** app
+     (press ⌘ + Space, type `Terminal`, press Enter), type `bash ` (with a space after it), drag
+     `SETUP-Mac.command` into the Terminal window, and press Enter. Do the same with
+     `APPLY-Mac.command` when you want to apply. Or allow it once: try to open the file, then go to
+     **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
    * Windows: if a blue "Windows protected your PC" box appears, click **More info** → **Run anyway**.
 3. **Apply:** double-click **`APPLY-Windows.bat`** or **`APPLY-Mac.command`**, paste the job
    link, and press Enter. A browser opens and fills in the application while you watch. At the
