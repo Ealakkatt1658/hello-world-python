@@ -20,6 +20,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Fill in (and optionally submit) Workday, Greenhouse and Lever job applications from your profile.",
     )
     parser.add_argument("urls", nargs="*", help="Job posting or application URL(s), each in quotes. Leave out to be asked.")
+    parser.add_argument("--setup", action="store_true", help="Create your profile by answering questions")
     parser.add_argument("--check", action="store_true", help="Check your setup (profile, resume, AI key, browser) and exit")
     parser.add_argument("--profile", default="profile.yaml", help="Your profile file (default: profile.yaml)")
     parser.add_argument(
@@ -74,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     log_file = setup_logging(args.verbose)
     log.info("Log file: %s", log_file)
     try:
+        if args.setup:
+            from job_autofill.setup_wizard import run_setup
+
+            run_setup(Path(args.profile))
+            args.check = True  # show the user straight away whether everything works
         profile = load_profile(args.profile)
     except ProfileError as exc:
         print(f"error: {exc}", file=sys.stderr)

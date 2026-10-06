@@ -222,3 +222,4 @@ profile.yaml
 .browser-profile/
 screenshots/
 logs/
+profile.yaml.bak

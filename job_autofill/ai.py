@@ -65,7 +65,8 @@ class AIAnswerer:
         if client is None:
             import anthropic
 
-            client = anthropic.Anthropic()
+            # A key saved by the setup questions; otherwise the SDK reads ANTHROPIC_API_KEY.
+            client = anthropic.Anthropic(api_key=settings.get("api_key") or None)
         self.client = client
         public = {k: v for k, v in profile.items() if k not in _PROFILE_OMIT}
         self.system = SYSTEM_PROMPT.format(profile=yaml.safe_dump(public, sort_keys=True, allow_unicode=True))
@@ -193,7 +194,9 @@ def make_answerer(profile: dict, mode: Optional[bool]) -> Optional[AIAnswerer]:
         if mode not in (None, ""):
             mode = truthy(mode)
         else:
-            mode = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+            mode = bool(
+                settings.get("api_key") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            )
     if not mode:
         return None
     if not ai_available():

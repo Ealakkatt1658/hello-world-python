@@ -6,6 +6,22 @@ in every page, answers the self-identification (gender / race / veteran / disabi
 the way you told it to, and submits. Optionally, Claude drafts answers to open-ended questions
 like "Why do you want to work here?" from your resume and the job posting.
 
+## Quick start (no typing commands)
+
+1. **Download:** [click here for the ZIP file](https://github.com/ealakkatt1658/hello-world-python/archive/refs/heads/claude/job-application-autofiller-42rd3w.zip), then unzip it (double-click it).
+2. **Set up (once):** in the unzipped folder, double-click **`SETUP-Windows.bat`** (Windows) or
+   **`SETUP-Mac.command`** (Mac). It installs everything and then asks you questions (name,
+   school, resume, ...). To add your resume, drag the PDF into the window when it asks.
+   * If Python isn't installed, it opens the download page. Install it, then double-click SETUP
+     again. On Windows, tick **"Add python.exe to PATH"** in the installer.
+   * Mac: if it says the file "can't be opened", right-click it → **Open** → **Open**.
+   * Windows: if a blue "Windows protected your PC" box appears, click **More info** → **Run anyway**.
+3. **Apply:** double-click **`APPLY-Windows.bat`** or **`APPLY-Mac.command`**, paste the job
+   link, and press Enter. A browser opens and fills in the application while you watch. At the
+   end it asks you to type `submit`. Type anything else to skip, which is handy for a test run.
+
+To change your answers later, run SETUP again or edit `profile.yaml` in Notepad or TextEdit.
+
 **Supported sites:**
 
 | Site | Links look like | Account needed? |
