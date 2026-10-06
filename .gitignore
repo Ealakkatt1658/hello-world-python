@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# job_autofill: personal data and browser session
+profile.yaml
+.browser-profile/
+screenshots/
+logs/
+profile.yaml.bak
