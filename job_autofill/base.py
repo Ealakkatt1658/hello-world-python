@@ -19,8 +19,9 @@ from job_autofill.profile import build_rules
 log = logging.getLogger(__name__)
 
 SUCCESS_TEXT = re.compile(
-    r"application (has been |was )?(successfully )?(submitted|received)|thank(s| you) for (applying|your application|your interest)|"
-    r"successfully submitted|congratulations|we have received your application|we've received your application",
+    r"application (has been |was |is )?(successfully )?(submitted|received|complete)|"
+    r"thank(s| you) for (applying|your application|your interest|submitting)|successfully (submitted|applied)|"
+    r"you(?:'ve| have) (successfully )?applied|congratulations|we(?: have|'ve)? received your application",
     re.I,
 )
 # Only frames that need a human. The invisible reCAPTCHA badge most forms carry is not one.
@@ -97,10 +98,11 @@ class BaseApplier:
         texts = []
         for sel in self.ERRORS:
             loc = self.page.locator(sel)
-            for i in range(loc.count()):
+            for i in range(min(loc.count(), 30)):
                 if loc.nth(i).is_visible():
                     t = loc.nth(i).inner_text().strip()
-                    if t and t not in texts:
+                    # Long text is a page section whose class happens to say "error", not a message.
+                    if t and len(t) < 300 and t not in texts:
                         texts.append(t)
         return texts
 

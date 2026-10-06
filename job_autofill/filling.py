@@ -48,7 +48,7 @@ class Answerer(Protocol):
 
 # Answering these can add, remove or re-draw other fields (e.g. "State" appearing after
 # "Country", or "Race" after "Hispanic or Latino? No"), so the page is re-scanned after each.
-RESHAPING = {"dropdown", "select", "combobox", "prompt", "radio", "checkbox", "checkboxes"}
+RESHAPING = {"dropdown", "select", "combobox", "prompt", "radio", "checkbox", "checkboxes", "buttons"}
 
 
 def fill_loop(

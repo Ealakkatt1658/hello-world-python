@@ -17,7 +17,8 @@ log = logging.getLogger("job_autofill")
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m job_autofill",
-        description="Fill in (and optionally submit) Workday, Greenhouse and Lever job applications from your profile.",
+        description="Fill in (and optionally submit) job applications from your profile: Workday, Greenhouse "
+        "and Lever, plus most other company job sites.",
     )
     parser.add_argument("urls", nargs="*", help="Job posting or application URL(s), each in quotes. Leave out to be asked.")
     parser.add_argument("--setup", action="store_true", help="Create your profile by answering questions")
@@ -88,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     from playwright.sync_api import sync_playwright
 
     from job_autofill.ai import make_answerer
-    from job_autofill.sites import SUPPORTED, applier_for
+    from job_autofill.sites import applier_for, job_board
 
     if args.check:
         return check_setup(args, profile)
@@ -109,9 +110,15 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    unsupported = [u for u in args.urls if applier_for(u) is None]
-    if unsupported:
-        print(f"error: only {SUPPORTED} applications are supported so far:\n  " + "\n  ".join(unsupported), file=sys.stderr)
+    boards = [(u, job_board(u)) for u in args.urls if job_board(u)]
+    for url, name in boards:
+        print(
+            f"Skipping {url}\n  {name} doesn't allow automated tools (it can ban your account for it). Open the job\n"
+            f"  on {name}, click Apply, and if it takes you to the company's own site, use that link instead.",
+            file=sys.stderr,
+        )
+    args.urls = [u for u in args.urls if not job_board(u)]
+    if not args.urls:
         return 2
     answerer = make_answerer(profile, args.ai)
 

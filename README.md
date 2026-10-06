@@ -26,13 +26,22 @@ like "Why do you want to work here?" from your resume and the job posting.
 
 To change your answers later, run SETUP again or edit `profile.yaml` in Notepad or TextEdit.
 
-**Supported sites:**
+**Which sites work?** Any company job site. Paste the link to the job posting or the application.
 
-| Site | Links look like | Account needed? |
-|---|---|---|
-| Workday | `*.myworkdayjobs.com/...`, `*.myworkday.com/...` | Yes (signs in or creates one) |
-| Greenhouse | `boards.greenhouse.io/...`, `job-boards.greenhouse.io/...`, company pages with `?gh_jid=` | No |
-| Lever | `jobs.lever.co/<company>/<id>` (with or without `/apply`) | No |
+| Site | How it's handled |
+|---|---|
+| Workday (`*.myworkdayjobs.com`) | Built specifically for it: signs in or creates the account, goes through every step |
+| Greenhouse (`greenhouse.io`, `?gh_jid=` links) | Built specifically for it |
+| Lever (`jobs.lever.co`) | Built specifically for it |
+| **Anything else** (Ashby, iCIMS, SmartRecruiters, Workable, Jobvite, BambooHR, Taleo, company career pages, ...) | General method, below |
+| LinkedIn, Indeed, Glassdoor, ZipRecruiter, Handshake | Skipped: these sites don't allow automated tools and can ban your account. Click Apply there and use the company-site link it takes you to. |
+
+**The general method** works on sites it has never seen. It reads the page like a person:
+it clicks **Apply** on the job posting, and signs in, or creates an account with your email
+and password, if the site asks. Then it fills in each page by reading the questions, uploads
+your resume, and clicks **Next/Continue** until the last page, where it stops for your OK
+before **Submit**. Every site is a little different, so on new sites expect it to sometimes
+stop and say **ACTION NEEDED**: do that one step in the browser, press Enter, and it carries on.
 
 ## Setup (one time, on your own computer)
 

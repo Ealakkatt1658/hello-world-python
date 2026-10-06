@@ -30,16 +30,25 @@ _LIST_FIELDS_JS = r"""
   const shown = el => visible(el) || (['radio', 'checkbox'].includes(el.type) &&
     ((el.labels && [...el.labels].some(visible)) || visible(el.parentElement)));
 
+  // The site's own search bar, menus and footer are never part of the application.
+  const CHROME = 'header, nav, footer, [role="search"], [role="navigation"], [role="banner"], [role="contentinfo"]';
+  const inChrome = el => !!el.closest(CHROME);
+
   const LABELISH = 'legend, label, .application-label, [class*="label" i], [class*="question" i], [class*="title" i]';
   const textOf = el => clean([...el.childNodes].map(n => n.nodeType === 3 ? n.textContent : (n.matches && n.matches('input, select, textarea, [role=listbox], ul[class*="menu" i]') ? '' : n.innerText || n.textContent)).join(' '));
 
-  // Nearest label-like element around `els` that is not itself an option label.
+  // Nearest label-like element around `els` that is not itself an option label. It only looks
+  // inside containers that hold this question alone: once a container also holds other
+  // questions' inputs, any label found there could belong to one of them.
+  const CONTROLS = 'input:not([type=hidden]), select, textarea';
   const questionFor = (els, maxUp = 5) => {
     let p = els[0].parentElement;
     while (p && !els.every(e => p.contains(e))) p = p.parentElement;
     for (let i = 0; i < maxUp && p && p !== document.body; i++, p = p.parentElement) {
+      const others = [...p.querySelectorAll(CONTROLS)].filter(c => !els.includes(c));
+      if (others.length) break;
       const cands = [...p.querySelectorAll(LABELISH)].filter(c =>
-        !c.querySelector('input, select, textarea') && !els.some(e => e.labels && [...e.labels].includes(c)) &&
+        c.tagName !== 'BUTTON' && !c.querySelector('input, select, textarea, button') && !els.some(e => e.labels && [...e.labels].includes(c)) &&
         !els.some(e => c.contains(e)));
       const hit = cands.find(c => clean(c.innerText));
       if (hit) return clean(hit.innerText);
@@ -57,9 +66,7 @@ _LIST_FIELDS_JS = r"""
       const t = textOf(el.labels[0]);
       if (t) return t;
     }
-    const q = questionFor([el]);
-    if (q) return q;
-    return clean(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name || '');
+    return questionFor([el]) || clean(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name || '');
   };
 
   const out = [];
@@ -70,7 +77,7 @@ _LIST_FIELDS_JS = r"""
     if (seen.has(el) || el.disabled) continue;
     const type = (el.type || '').toLowerCase();
     if (['hidden', 'submit', 'button', 'file', 'image', 'reset', 'password'].includes(type)) continue;
-    if (el.closest('[data-af-skip]')) continue;
+    if (el.closest('[data-af-skip]') || inChrome(el)) continue;
 
     let kind, label, options = [], filled = false, current = '', context = '', els = [el], required = false;
     if (type === 'radio' || type === 'checkbox') {
@@ -124,6 +131,41 @@ _LIST_FIELDS_JS = r"""
       label: clean(label.replace(/\*/g, ' ')).replace(/\(\s*(required|optional)\s*\)$/i, '').trim(),
       context,
     });
+  }
+
+  const pushGroup = (kind, opts, label, required, isOn, optText) => {
+    const on = opts.filter(isOn);
+    out.push({
+      id: tag(opts), kind, required: required || /\*/.test(label), filled: on.length > 0,
+      current: on.map(optText).join('; '), options: opts.map(optText),
+      label: clean(label.replace(/\*/g, ' ')), context: '',
+    });
+  };
+  const byIds = ids => clean((ids || '').split(/\s+/).map(id => document.getElementById(id)).filter(Boolean).map(e => e.innerText).join(' '));
+
+  // Custom radio groups built from ARIA roles instead of <input type=radio>.
+  for (const g of root.querySelectorAll('[role="radiogroup"]')) {
+    if (g.querySelector('input[type=radio]') || inChrome(g) || !visible(g)) continue;
+    const opts = [...g.querySelectorAll('[role="radio"]')];
+    if (!opts.length) continue;
+    const label = byIds(g.getAttribute('aria-labelledby')) || clean(g.getAttribute('aria-label')) || questionFor(opts);
+    pushGroup('radio', opts, label, g.getAttribute('aria-required') === 'true',
+      o => o.getAttribute('aria-checked') === 'true', o => clean(o.getAttribute('aria-label') || o.innerText));
+  }
+
+  // Yes/No answered with a pair of buttons instead of radio buttons (e.g. Ashby).
+  const groups = new Set();
+  for (const b of root.querySelectorAll('button')) {
+    const p = b.parentElement;
+    if (!p || groups.has(p) || inChrome(p) || !visible(p)) continue;
+    groups.add(p);
+    const btns = [...p.children].filter(c => c.tagName === 'BUTTON' && visible(c));
+    const texts = btns.map(x => clean(x.innerText).toLowerCase());
+    const yesNo = texts.includes('yes') && texts.includes('no');
+    if (btns.length < 2 || btns.length > 6 || !(yesNo || btns.every(x => x.hasAttribute('aria-pressed')))) continue;
+    pushGroup('buttons', btns, questionFor(btns), false,
+      x => x.getAttribute('aria-pressed') === 'true' || /(^|[^a-z])(active|selected|checked)/i.test(String(x.className)),
+      x => clean(x.innerText));
   }
   return out;
 }
@@ -183,6 +225,13 @@ def set_field(page: Page, field: Field, value: Any) -> bool:
             log.warning("  No option matching %r among %s", value, field.options)
             return False
         _check(loc.nth(idx), True)
+        return True
+    if kind == "buttons":
+        idx = best_option(field.options, value)
+        if idx is None:
+            log.warning("  No option matching %r among %s", value, field.options)
+            return False
+        loc.nth(idx).click()
         return True
     if kind == "checkboxes":
         hit = False

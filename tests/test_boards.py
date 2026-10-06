@@ -4,6 +4,7 @@ import pytest
 
 from job_autofill.ai import AIAnswerer
 from job_autofill.base import NeedsAttention
+from job_autofill.generic import GenericApplier
 from job_autofill.filling import SENSITIVE
 from job_autofill.greenhouse import GreenhouseApplier
 from job_autofill.lever import LeverApplier
@@ -64,7 +65,7 @@ def test_dispatch():
     assert applier_for("https://boards.greenhouse.io/embed/job_app?for=acme&token=1") is GreenhouseApplier
     assert applier_for("https://careers.acme.com/jobs?gh_jid=4001") is GreenhouseApplier
     assert applier_for(LEVER_URL + "/apply") is LeverApplier
-    assert applier_for("https://example.com/jobs/1") is None
+    assert applier_for("https://example.com/jobs/1") is GenericApplier
 
 
 def test_greenhouse_full_application(page, serve, profile, tmp_path):
